@@ -16,11 +16,19 @@ def fill(session):
 
 
 def test_numbering(session):
-    assert json.loads(session.new_order())["number"].endswith("-00001")
-    fill(session)
+    first = json.loads(session.new_order())["number"]
+    second = json.loads(session.new_order())["number"]
+    assert first.endswith("-00001") and second.endswith("-00002")  # номер резервируется сразу
+    fill(session)  # заказ -00003
     session.add_operation("BRK-PAD-F")
     session.save_order()
-    assert json.loads(session.new_order())["number"].endswith("-00002")
+    assert json.loads(session.new_order())["number"].endswith("-00004")
+    assert [o.number[-5:] for o in session.store.list()] == ["00003"]
+
+
+def test_store_rejects_bad_number(session):
+    with pytest.raises(ToolError):
+        session.open_order("../../etc/passwd")
 
 
 def test_vehicle_from_vin(session):

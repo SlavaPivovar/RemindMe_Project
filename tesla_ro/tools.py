@@ -301,6 +301,14 @@ class OrderSession:
     def _totals(self) -> dict:
         return {k: str(v) for k, v in self._order.totals().items()}
 
+    def snapshot(self) -> dict | None:
+        """Состояние заказа для интерфейса (не инструмент модели)."""
+        if self.order is None:
+            return None
+        data = self.order.to_dict()
+        data["missing_fields"] = self.order.missing_fields()
+        return data
+
     def get_order(self) -> str:
         """Показать текущее состояние заказ-наряда: все поля, строки, итоги и чего не хватает."""
         data = self._order.to_dict()

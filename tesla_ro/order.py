@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -120,26 +122,48 @@ class RepairOrder:
         return cls(**data)
 
 
+NUMBER_RE = re.compile(r"^ЗН-\d{4}-\d{5}$")
+
+
 class OrderStore:
     """Хранит заказ-наряды в виде JSON-файлов в каталоге."""
 
     def __init__(self, directory: str | Path = "orders"):
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self._reserved: set[str] = set()
 
     def next_number(self) -> str:
+        """Выдать новый номер. Номер резервируется, даже если заказ ещё не сохранён,
+        чтобы параллельные сеансы не получили одинаковые номера."""
         year = datetime.now().year
-        nums = [
-            int(p.stem.split("-")[-1])
-            for p in self.dir.glob(f"ЗН-{year}-*.json")
-            if p.stem.split("-")[-1].isdigit()
-        ]
-        return f"ЗН-{year}-{max(nums, default=0) + 1:05d}"
+        prefix = f"ЗН-{year}-"
+        with self._lock:
+            taken = {p.stem for p in self.dir.glob(f"{prefix}*.json")} | self._reserved
+            nums = [int(n[len(prefix):]) for n in taken if n.startswith(prefix) and n[len(prefix):].isdigit()]
+            number = f"{prefix}{max(nums, default=0) + 1:05d}"
+            self._reserved.add(number)
+            return number
+
+    def _path(self, number: str) -> Path:
+        if not NUMBER_RE.match(number):
+            raise FileNotFoundError(number)
+        return self.dir / f"{number}.json"
+
+    def list(self) -> list[RepairOrder]:
+        orders = []
+        for path in sorted(self.dir.glob("ЗН-*.json"), reverse=True):
+            try:
+                orders.append(RepairOrder.from_dict(json.loads(path.read_text(encoding="utf-8"))))
+            except (ValueError, TypeError, KeyError):
+                continue
+        return orders
 
     def save(self, order: RepairOrder) -> Path:
-        path = self.dir / f"{order.number}.json"
+        path = self._path(order.number)
         path.write_text(json.dumps(order.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
     def load(self, number: str) -> RepairOrder:
-        return RepairOrder.from_dict(json.loads((self.dir / f"{number}.json").read_text(encoding="utf-8")))
+        return RepairOrder.from_dict(json.loads(self._path(number).read_text(encoding="utf-8")))

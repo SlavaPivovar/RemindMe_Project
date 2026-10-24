@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Заказ-наряды Tesla</title>
+<style>
+:root{
+  --bg:#f4f5f7; --panel:#fff; --text:#16181d; --muted:#6b7280; --line:#e3e5e9;
+  --accent:#d32f2f; --accent-ink:#fff; --user:#1f2937; --user-ink:#fff; --bot:#f0f1f4;
+  --warn-bg:#fff4e5; --warn:#9a5b00; --ok:#1b7f3b; --shadow:0 1px 2px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1115; --panel:#171a20; --text:#e8eaed; --muted:#9aa1ad; --line:#2a2f38;
+    --accent:#ef5350; --accent-ink:#fff; --user:#e8eaed; --user-ink:#111; --bot:#20242c;
+    --warn-bg:#3a2a10; --warn:#f3b664; --ok:#5fd38a; --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1115; --panel:#171a20; --text:#e8eaed; --muted:#9aa1ad; --line:#2a2f38;
+  --accent:#ef5350; --accent-ink:#fff; --user:#e8eaed; --user-ink:#111; --bot:#20242c;
+  --warn-bg:#3a2a10; --warn:#f3b664; --ok:#5fd38a; --shadow:none;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;display:flex;flex-direction:column}
+button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);padding:7px 12px}
+button:hover{border-color:var(--muted)}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button:disabled{opacity:.5;cursor:default}
+header{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:16px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header h1 span{color:var(--muted);font-weight:400}
+.tabs{display:none;gap:4px;padding:8px 16px 0}
+.tabs button{flex:1}
+.tabs button.on{background:var(--text);color:var(--bg);border-color:var(--text)}
+main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(340px,5fr) 7fr;gap:16px;padding:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);min-height:0;display:flex;flex-direction:column}
+#chat .log{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:88%;padding:9px 12px;border-radius:12px;white-space:normal;overflow-wrap:anywhere}
+.msg.user{align-self:flex-end;background:var(--user);color:var(--user-ink);border-bottom-right-radius:4px}
+.msg.assistant{align-self:flex-start;background:var(--bot);border-bottom-left-radius:4px}
+.msg.error{align-self:center;background:var(--warn-bg);color:var(--warn);font-size:13px}
+.msg p{margin:0 0 6px}.msg p:last-child{margin:0}.msg ul{margin:4px 0 6px;padding-left:20px}
+.typing{align-self:flex-start;color:var(--muted);font-size:13px}
+.typing::after{content:"";animation:dots 1.2s steps(4) infinite}
+@keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
+.hints{display:flex;flex-wrap:wrap;gap:6px;padding:0 16px 10px}
+.hints button{font-size:12px;padding:4px 10px;border-radius:999px;color:var(--muted)}
+form.composer{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
+form.composer textarea{flex:1;resize:none;font:inherit;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);max-height:160px}
+#order{overflow:auto}
+#order .body{padding:16px 20px}
+.empty{color:var(--muted);text-align:center;margin:auto;padding:40px 20px}
+.ohead{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 12px;margin-bottom:12px}
+.ohead h2{margin:0;font-size:18px}
+.badge{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--bot);color:var(--muted)}
+.ohead .actions{margin-left:auto;display:flex;gap:6px}
+.missing{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:13px}
+.done{color:var(--ok);font-size:13px;margin-bottom:14px}
+.info{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:16px}
+.info dl{margin:0;display:grid;align-content:start;grid-template-columns:auto 1fr;gap:3px 10px}
+.info dt{color:var(--muted)}.info dd{margin:0;overflow-wrap:anywhere}
+h3{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:18px 0 6px}
+.tbl{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:500}
+.r{text-align:right;white-space:nowrap}
+ul.plain{margin:0;padding-left:18px}
+.totals{margin:14px 0 0 auto;width:max-content;min-width:260px}
+.totals div{display:flex;justify-content:space-between;gap:24px;padding:3px 0}
+.totals .grand{font-size:16px;font-weight:700;border-top:1px solid var(--line);margin-top:4px;padding-top:8px}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--text);padding:0;width:min(760px,calc(100vw - 32px));max-height:80vh}
+dialog::backdrop{background:rgba(0,0,0,.4)}
+dialog .dh{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
+dialog .dh h2{margin:0;font-size:16px;flex:1}
+dialog .db{padding:8px 16px 16px;overflow:auto;max-height:calc(80vh - 60px)}
+dialog td button{padding:3px 8px;font-size:12px}
+@media (max-width:900px){
+  .tabs{display:flex}
+  main{grid-template-columns:1fr;padding:8px 16px 16px}
+  main > .card{display:none}
+  main > .card.show{display:flex}
+  .info{grid-template-columns:1fr}
+  header .label{display:none}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Заказ-наряды Tesla <span id="svc"></span></h1>
+  <button id="btnOrders" title="Сохранённые заказ-наряды">📁 <span class="label">Сохранённые</span></button>
+  <button id="btnNew" title="Начать новый заказ-наряд">＋ <span class="label">Новый</span></button>
+</header>
+<div class="tabs"><button data-tab="chat" class="on">Чат</button><button data-tab="order">Заказ-наряд</button></div>
+<main>
+  <section id="chat" class="card show">
+    <div class="log" id="log"></div>
+    <div class="hints" id="hints">
+      <button>Новый заказ: Иванов Иван, +7 900 000-00-00, VIN 5YJ3E1EA9LF000316, пробег 48 000 км</button>
+      <button>Скрипят тормоза спереди</button>
+      <button>Не работает кондиционер</button>
+      <button>Покажи итог</button>
+      <button>Сохрани заказ-наряд</button>
+    </div>
+    <form class="composer" id="composer">
+      <textarea id="input" rows="2" placeholder="Клиент, автомобиль, жалобы… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+      <button class="primary" id="send">Отправить</button>
+    </form>
+  </section>
+  <section id="order" class="card"><div class="body" id="orderBody"></div></section>
+</main>
+
+<dialog id="ordersDlg">
+  <div class="dh"><h2>Сохранённые заказ-наряды</h2><button id="closeDlg">✕</button></div>
+  <div class="db" id="ordersList"></div>
+</dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = v => Number(v).toLocaleString("ru-RU", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const dash = v => (v === null || v === undefined || v === "") ? "—" : esc(v);
+let busy = false;
+
+function md(text){
+  // Минимальная разметка: абзацы, списки, **жирный**, `код`.
+  const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  let html = "", list = null;
+  for (const raw of text.split("\n")){
+    const line = raw.trim();
+    const m = line.match(/^(?:[-*•]|\d+[.)])\s+(.*)/);
+    if (m){ if (!list){ list = []; } list.push(`<li>${inline(m[1])}</li>`); continue; }
+    if (list){ html += `<ul>${list.join("")}</ul>`; list = null; }
+    if (line) html += `<p>${inline(line)}</p>`;
+  }
+  if (list) html += `<ul>${list.join("")}</ul>`;
+  return html;
+}
+
+function addMsg(role, text){
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  div.innerHTML = role === "assistant" ? md(text) : esc(text).replace(/\n/g, "<br>");
+  $("#log").appendChild(div);
+  $("#log").scrollTop = $("#log").scrollHeight;
+  return div;
+}
+
+function greet(){
+  addMsg("assistant", "Здравствуйте! Опишите клиента, автомобиль (VIN, пробег) и жалобы — я подберу работы и запчасти и оформлю заказ-наряд.");
+}
+
+function renderOrder(o){
+  const box = $("#orderBody");
+  if (!o){ box.innerHTML = `<div class="empty">Заказ-наряд появится здесь, как только вы начнёте диалог.</div>`; return; }
+  const c = o.customer, v = o.vehicle, t = o.totals, cur = esc(o.currency);
+  const lines = (rows, isLabor) => rows.length ? rows.map((l, i) => `<tr>
+      <td>${i + 1}</td><td>${esc(isLabor ? l.code : l.part_no)}</td><td>${esc(l.name)}</td>
+      <td class="r">${isLabor ? String(l.hours).replace(".", ",") : String(l.qty).replace(".", ",") + " " + esc(l.unit)}</td>
+      <td class="r">${num(isLabor ? l.rate : l.price)}</td>
+      <td class="r">${l.discount_percent ? esc(l.discount_percent) + "%" : ""}</td>
+      <td class="r">${num((isLabor ? l.hours * l.rate : l.qty * l.price) * (1 - l.discount_percent / 100))}</td></tr>`).join("")
+    : `<tr><td colspan="7" style="color:var(--muted)">—</td></tr>`;
+  const vat = o.prices_include_vat ? `в т.ч. НДС ${esc(o.vat_percent)}%` : `НДС ${esc(o.vat_percent)}%`;
+  box.innerHTML = `
+    <div class="ohead">
+      <h2>№ ${esc(o.number)}</h2><span class="badge">${esc(o.status)}</span><span class="badge">${esc(o.created_at)}</span>
+      <div class="actions"><button id="btnPrint">🖨 Печать</button></div>
+    </div>
+    ${o.missing_fields.length ? `<div class="missing">Не заполнено: ${o.missing_fields.map(esc).join(", ")}</div>` : `<div class="done">✓ Все обязательные поля заполнены</div>`}
+    <div class="info">
+      <dl><dt>Заказчик</dt><dd>${dash(c.name)}</dd><dt>Телефон</dt><dd>${dash(c.phone)}</dd><dt>E-mail</dt><dd>${dash(c.email)}</dd></dl>
+      <dl><dt>Автомобиль</dt><dd>${v.model ? "Tesla " + esc(v.model) + " " + dash(v.year) : "—"}</dd><dt>VIN</dt><dd>${dash(v.vin)}</dd>
+          <dt>Гос. номер</dt><dd>${dash(v.plate)}</dd><dt>Пробег</dt><dd>${v.odometer_km != null ? Number(v.odometer_km).toLocaleString("ru-RU") + " км" : "—"}</dd>
+          ${v.color ? `<dt>Цвет</dt><dd>${esc(v.color)}</dd>` : ""}${v.battery_percent != null ? `<dt>Заряд ВВБ</dt><dd>${esc(v.battery_percent)}%</dd>` : ""}</dl>
+    </div>
+    <h3>Жалобы клиента</h3>
+    ${o.complaints.length ? `<ul class="plain">${o.complaints.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : `<div style="color:var(--muted)">—</div>`}
+    ${o.diagnosis ? `<h3>Диагностика</h3><div>${esc(o.diagnosis)}</div>` : ""}
+    <h3>Работы</h3>
+    <div class="tbl"><table><tr><th>№</th><th>Код</th><th>Наименование</th><th class="r">Н/ч</th><th class="r">Цена н/ч</th><th class="r">Скидка</th><th class="r">Сумма</th></tr>${lines(o.labor, true)}</table></div>
+    <h3>Запчасти и материалы</h3>
+    <div class="tbl"><table><tr><th>№</th><th>Артикул</th><th>Наименование</th><th class="r">Кол-во</th><th class="r">Цена</th><th class="r">Скидка</th><th class="r">Сумма</th></tr>${lines(o.parts, false)}</table></div>
+    <div class="totals">
+      <div><span>Работы</span><span>${num(t.labor)} ${cur}</span></div>
+      <div><span>Запчасти</span><span>${num(t.parts)} ${cur}</span></div>
+      <div><span>${vat}</span><span>${num(t.vat)} ${cur}</span></div>
+      <div class="grand"><span>Итого</span><span>${num(t.total)} ${cur}</span></div>
+    </div>
+    ${o.recommendations.length ? `<h3>Рекомендации</h3><ul class="plain">${o.recommendations.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}`;
+  $("#btnPrint").onclick = () => window.open("/print/current", "_blank");
+}
+
+async function api(path, opts = {}){
+  const r = await fetch(path, {headers: {"Content-Type": "application/json"}, credentials: "same-origin", ...opts});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || data.detail || `Ошибка ${r.status}`);
+  return data;
+}
+
+async function send(text){
+  text = text.trim();
+  if (!text || busy) return;
+  busy = true; $("#send").disabled = true;
+  addMsg("user", text);
+  $("#input").value = "";
+  const typing = document.createElement("div");
+  typing.className = "typing"; typing.textContent = "Помощник работает";
+  $("#log").appendChild(typing); $("#log").scrollTop = $("#log").scrollHeight;
+  try{
+    const data = await api("/api/chat", {method: "POST", body: JSON.stringify({text})});
+    typing.remove();
+    if (data.reply) addMsg("assistant", data.reply);
+    renderOrder(data.order);
+  }catch(e){
+    typing.remove();
+    addMsg("error", e.message);
+  }finally{
+    busy = false; $("#send").disabled = false; $("#input").focus();
+  }
+}
+
+async function showOrders(){
+  $("#ordersList").innerHTML = "Загрузка…";
+  $("#ordersDlg").showModal();
+  try{
+    const list = await api("/api/orders");
+    $("#ordersList").innerHTML = list.length ? `<div class="tbl"><table>
+      <tr><th>Номер</th><th>Дата</th><th>Клиент</th><th>Автомобиль</th><th class="r">Сумма</th><th>Статус</th><th></th></tr>
+      ${list.map(o => `<tr><td>${esc(o.number)}</td><td>${esc(o.created_at)}</td><td>${dash(o.customer)}</td><td>${dash(o.vehicle)}</td>
+        <td class="r">${num(o.total)} ${esc(o.currency)}</td><td>${esc(o.status)}</td>
+        <td class="r"><button data-open="${esc(o.number)}">Открыть</button> <button data-print="${esc(o.number)}">🖨</button></td></tr>`).join("")}
+      </table></div>` : `<div class="empty">Сохранённых заказ-нарядов пока нет.</div>`;
+  }catch(e){ $("#ordersList").textContent = e.message; }
+}
+
+$("#ordersList").addEventListener("click", async e => {
+  const open = e.target.dataset.open, print = e.target.dataset.print;
+  if (print) window.open("/print/" + encodeURIComponent(print), "_blank");
+  if (open){
+    const data = await api(`/api/orders/${encodeURIComponent(open)}/open`, {method: "POST"});
+    $("#ordersDlg").close();
+    $("#log").innerHTML = "";
+    addMsg("assistant", `Открыт заказ-наряд № ${open}. Что нужно изменить?`);
+    renderOrder(data.order);
+  }
+});
+
+$("#composer").addEventListener("submit", e => { e.preventDefault(); send($("#input").value); });
+$("#input").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); send($("#input").value); }
+});
+$("#hints").addEventListener("click", e => { if (e.target.tagName === "BUTTON") send(e.target.textContent); });
+$("#btnOrders").onclick = showOrders;
+$("#closeDlg").onclick = () => $("#ordersDlg").close();
+$("#btnNew").onclick = async () => {
+  if (busy) return;
+  await api("/api/reset", {method: "POST"});
+  $("#log").innerHTML = ""; greet(); renderOrder(null);
+};
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll("main > .card").forEach(c => c.classList.toggle("show", c.id === b.dataset.tab));
+});
+
+(async () => {
+  try{
+    const s = await api("/api/state");
+    if (s.service && s.service.name) $("#svc").textContent = "· " + s.service.name;
+    if (s.history.length) s.history.forEach(m => addMsg(m.role, m.text)); else greet();
+    renderOrder(s.order);
+  }catch(e){ greet(); renderOrder(null); addMsg("error", e.message); }
+})();
+</script>
+</body>
+</html>
