@@ -49,7 +49,11 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(340px,5fr) 7f
 .hints{display:flex;flex-wrap:wrap;gap:6px;padding:0 16px 10px}
 .hints button{font-size:12px;padding:4px 10px;border-radius:999px;color:var(--muted)}
 form.composer{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
-form.composer textarea{flex:1;resize:none;font:inherit;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);max-height:160px}
+form.composer .mic{display:flex;align-items:center;justify-content:center;width:44px;padding:0;flex:none}
+form.composer .mic svg{width:20px;height:20px}
+form.composer .mic.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(211,47,47,.45)}50%{box-shadow:0 0 0 6px rgba(211,47,47,0)}}
+form.composer textarea{flex:1;min-width:0;resize:none;font:inherit;padding:9px 11px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);max-height:160px}
 #order{overflow:auto}
 #order .body{padding:16px 20px}
 .empty{color:var(--muted);text-align:center;margin:auto;padding:40px 20px}
@@ -80,7 +84,7 @@ dialog .db{padding:8px 16px 16px;overflow:auto;max-height:calc(80vh - 60px)}
 dialog td button{padding:3px 8px;font-size:12px}
 @media (max-width:900px){
   .tabs{display:flex}
-  main{grid-template-columns:1fr;padding:8px 16px 16px}
+  main{grid-template-columns:minmax(0,1fr);padding:8px 16px 16px}
   main > .card{display:none}
   main > .card.show{display:flex}
   .info{grid-template-columns:1fr}
@@ -108,6 +112,9 @@ dialog td button{padding:3px 8px;font-size:12px}
     </div>
     <form class="composer" id="composer">
       <textarea id="input" rows="2" placeholder="Клієнт, автомобіль, скарги… (Enter — надіслати, Shift+Enter — новий рядок)"></textarea>
+      <button type="button" class="mic" id="mic" title="Голосове введення" aria-label="Голосове введення" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg>
+      </button>
       <button class="primary" id="send">Надіслати</button>
     </form>
   </section>
@@ -203,9 +210,60 @@ async function api(path, opts = {}){
   return data;
 }
 
+// Голосове введення: розпізнавання мовлення вбудоване в браузер (Web Speech API).
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognizer = null;
+
+function setListening(on){
+  $("#mic").classList.toggle("on", on);
+  $("#mic").setAttribute("aria-pressed", String(on));
+  $("#mic").title = on ? "Зупинити запис" : "Голосове введення";
+  $("#input").placeholder = on ? "Слухаю… говоріть"
+                               : "Клієнт, автомобіль, скарги… (Enter — надіслати, Shift+Enter — новий рядок)";
+}
+
+function stopVoice(discard = false){
+  if (!recognizer) return;
+  if (discard) recognizer.onresult = null;  // текст уже отправлен — пізні результати не потрібні
+  recognizer.stop();
+}
+
+function startVoice(){
+  if (!Recognition){
+    addMsg("error", "Цей браузер не підтримує голосове введення. Скористайтеся мікрофоном на клавіатурі телефона або відкрийте сторінку в Chrome чи Safari.");
+    return;
+  }
+  const input = $("#input");
+  const base = input.value.trim() ? input.value.trim() + " " : "";
+  const r = new Recognition();
+  r.lang = "uk-UA";
+  // Chrome на Android у безперервному режимі дублює фрази, тому там запис зупиняється після паузи.
+  r.continuous = !/Android/i.test(navigator.userAgent);
+  r.interimResults = true;
+  r.onresult = e => {
+    let text = "";
+    for (const res of e.results) text += res[0].transcript;
+    input.value = base + text.trim();
+  };
+  r.onerror = e => {
+    const msg = {
+      "not-allowed": "Немає доступу до мікрофона. Дозвольте його в налаштуваннях браузера для цього сайту.",
+      "service-not-allowed": "Немає доступу до мікрофона. Дозвольте його в налаштуваннях браузера для цього сайту.",
+      "audio-capture": "Мікрофон не знайдено.",
+      "network": "Розпізнавання мовлення недоступне: немає з'єднання.",
+    }[e.error];
+    if (msg) addMsg("error", msg);
+  };
+  r.onend = () => { recognizer = null; setListening(false); input.focus(); };
+  try{ r.start(); }catch(err){ addMsg("error", "Не вдалося увімкнути мікрофон: " + err.message); return; }
+  recognizer = r;
+  setListening(true);
+}
+
 async function send(text){
   text = text.trim();
   if (!text || busy) return;
+  stopVoice(true);
   busy = true; $("#send").disabled = true;
   addMsg("user", text);
   $("#input").value = "";
@@ -251,6 +309,7 @@ $("#ordersList").addEventListener("click", async e => {
   }
 });
 
+$("#mic").onclick = () => recognizer ? stopVoice() : startVoice();
 $("#composer").addEventListener("submit", e => { e.preventDefault(); send($("#input").value); });
 $("#input").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); send($("#input").value); }
