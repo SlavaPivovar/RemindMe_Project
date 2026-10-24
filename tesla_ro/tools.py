@@ -39,7 +39,7 @@ class OrderSession:
         return [
             self.new_order, self.open_order, self.set_customer, self.set_vehicle, self.decode_vin,
             self.add_complaint, self.set_diagnosis, self.add_recommendation,
-            self.search_operations, self.search_parts, self.add_operation, self.add_custom_labor,
+            self.search_operations, self.get_maintenance_schedule, self.search_parts, self.add_operation, self.add_custom_labor,
             self.add_part, self.add_custom_part, self.set_discount, self.remove_line,
             self.get_order, self.save_order,
         ]
@@ -169,11 +169,20 @@ class OrderSession:
         """
         model_code = self.order.vehicle.model_code if self.order else None
         ops = self.catalog.search_operations(query, model_code or None)
-        return _json([
-            {"code": o.code, "name": o.name, "hours": o.hours,
-             "price": round(o.hours * self.catalog.labor_rate, 2), "parts": o.parts}
-            for o in ops
-        ])
+        return _json([self._op_info(o) for o in ops])
+
+    def get_maintenance_schedule(self) -> str:
+        """Показати регламентні роботи з рекомендованими інтервалами для моделі поточного автомобіля.
+        Використовуй, щоб порадити клієнту планове обслуговування за пробігом і віком авто."""
+        model_code = self.order.vehicle.model_code if self.order else None
+        return _json([self._op_info(o) for o in self.catalog.operations.values()
+                      if o.interval and o.fits(model_code or None)])
+
+    def _op_info(self, o) -> dict:
+        parts_price = sum(self.catalog.parts[p].price for p in o.parts if p in self.catalog.parts)
+        return {"code": o.code, "name": o.name, "category": o.category, "hours": o.hours,
+                "labor_price": round(o.hours * self.catalog.labor_rate, 2), "parts": o.parts,
+                "parts_price": round(parts_price, 2), "interval": o.interval}
 
     def search_parts(self, query: str) -> str:
         """Знайти запчастини та матеріали в довіднику за ключовими словами або артикулом.

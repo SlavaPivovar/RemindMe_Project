@@ -16,6 +16,8 @@ class Operation:
     hours: float
     models: list[str]
     parts: list[str]
+    category: str = ""
+    interval: str = ""  # рекомендований інтервал обслуговування, якщо є
 
     def fits(self, model_code: str | None) -> bool:
         return "*" in self.models or model_code is None or model_code in self.models
@@ -45,14 +47,20 @@ class Catalog:
 
     def search_operations(self, query: str, model_code: str | None = None) -> list[Operation]:
         words = [w for w in query.lower().split() if len(w) > 2]
-        found = []
+        scored = []
         for op in self.operations.values():
             if not op.fits(model_code):
                 continue
-            hay = f"{op.code} {op.name}".lower()
-            if not words or any(w[:5] in hay for w in words):
-                found.append(op)
-        return found
+            hay = f"{op.code} {op.name} {op.category}".lower()
+            score = sum(w[:5] in hay for w in words)
+            if not words or score:
+                scored.append((score, op))
+        # Спершу роботи, що збіглися з більшою кількістю слів запиту.
+        scored.sort(key=lambda x: -x[0])
+        return [op for _, op in scored]
+
+    def categories(self) -> list[str]:
+        return list(dict.fromkeys(op.category for op in self.operations.values() if op.category))
 
     def search_parts(self, query: str) -> list[Part]:
         words = [w for w in query.lower().split() if len(w) > 2]

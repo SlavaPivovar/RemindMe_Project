@@ -89,7 +89,7 @@ th{{background:#eee;text-align:left}} .r{{text-align:right;white-space:nowrap}}
 <table class=tot style="width:auto;margin:12px 0 0 auto">
 <tr><td>Разом роботи:</td><td class=r>{fmt(t["labor"])} {cur}</td></tr>
 <tr><td>Разом запчастини:</td><td class=r>{fmt(t["parts"])} {cur}</td></tr>
-<tr><td>{vat_label}:</td><td class=r>{fmt(t["vat"])} {cur}</td></tr>
+{f'<tr><td>{vat_label}:</td><td class=r>{fmt(t["vat"])} {cur}</td></tr>' if order.vat_percent else ""}
 <tr><td><b>УСЬОГО ДО СПЛАТИ:</b></td><td class=r><b>{fmt(t["total"])} {cur}</b></td></tr>
 </table>
 {f"<h2>Рекомендації</h2><ul>{recs}</ul>" if recs else ""}

@@ -82,12 +82,21 @@ dialog .dh{display:flex;align-items:center;padding:12px 16px;border-bottom:1px s
 dialog .dh h2{margin:0;font-size:16px;flex:1}
 dialog .db{padding:8px 16px 16px;overflow:auto;max-height:calc(80vh - 60px)}
 dialog td button{padding:3px 8px;font-size:12px}
+.filters{display:flex;flex-wrap:wrap;gap:8px;padding:10px 0}
+.filters input,.filters select{font:inherit;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.filters input{flex:1;min-width:160px}
+.cat-row td{background:var(--bot);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)}
+.sub{color:var(--muted);font-size:12px}
+.show-m{display:none}
 @media (max-width:900px){
   .tabs{display:flex}
   main{grid-template-columns:minmax(0,1fr);padding:8px 16px 16px}
   main > .card{display:none}
   main > .card.show{display:flex}
   .info{grid-template-columns:1fr}
+  #catalogList .hide-m{display:none}
+  #catalogList .show-m{display:inline}
+  #catalogList th,#catalogList td{padding:6px 4px}
   header .label{display:none}
 }
 </style>
@@ -95,6 +104,7 @@ dialog td button{padding:3px 8px;font-size:12px}
 <body>
 <header>
   <h1><span id="brand">DK-TeslaService</span> <span>· Замовлення-наряди</span></h1>
+  <button id="btnCatalog" title="Довідник робіт">📚 <span class="label">Довідник</span></button>
   <button id="btnOrders" title="Збережені замовлення-наряди">📁 <span class="label">Збережені</span></button>
   <button id="btnNew" title="Почати нове замовлення-наряд">＋ <span class="label">Нове</span></button>
   <button id="btnLogout" title="Вийти" hidden>⎋ <span class="label">Вийти</span></button>
@@ -120,6 +130,17 @@ dialog td button{padding:3px 8px;font-size:12px}
   </section>
   <section id="order" class="card"><div class="body" id="orderBody"></div></section>
 </main>
+
+<dialog id="catalogDlg">
+  <div class="dh"><h2>Довідник робіт</h2><button id="closeCatalog">✕</button></div>
+  <div class="db">
+    <div class="filters">
+      <input id="catQuery" type="search" placeholder="Пошук: колодки, кондиціонер, BRK-PAD-F…">
+      <select id="catCategory"><option value="">Усі розділи</option></select>
+    </div>
+    <div id="catalogList">Завантаження…</div>
+  </div>
+</dialog>
 
 <dialog id="ordersDlg">
   <div class="dh"><h2>Збережені замовлення-наряди</h2><button id="closeDlg">✕</button></div>
@@ -195,7 +216,7 @@ function renderOrder(o){
     <div class="totals">
       <div><span>Роботи</span><span>${num(t.labor)} ${cur}</span></div>
       <div><span>Запчастини</span><span>${num(t.parts)} ${cur}</span></div>
-      <div><span>${vat}</span><span>${num(t.vat)} ${cur}</span></div>
+      ${Number(o.vat_percent) ? `<div><span>${vat}</span><span>${num(t.vat)} ${cur}</span></div>` : ""}
       <div class="grand"><span>Разом</span><span>${num(t.total)} ${cur}</span></div>
     </div>
     ${o.recommendations.length ? `<h3>Рекомендації</h3><ul class="plain">${o.recommendations.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}`;
@@ -318,6 +339,45 @@ $("#hints").addEventListener("click", e => { if (e.target.tagName === "BUTTON") 
 $("#btnOrders").onclick = showOrders;
 $("#btnLogout").onclick = () => { location.href = "/logout"; };
 $("#closeDlg").onclick = () => $("#ordersDlg").close();
+
+let catalogData = null;
+function renderCatalog(){
+  const q = $("#catQuery").value.trim().toLowerCase(), cat = $("#catCategory").value, cur = esc(catalogData.currency);
+  const words = q.split(/\s+/).filter(Boolean);
+  const ops = catalogData.operations.filter(o => (!cat || o.category === cat) &&
+    words.every(w => `${o.code} ${o.name} ${o.category} ${o.parts.map(p => p.name).join(" ")}`.toLowerCase().includes(w)));
+  if (!ops.length){ $("#catalogList").innerHTML = `<div class="empty">Нічого не знайдено.</div>`; return; }
+  let html = `<div class="tbl"><table><tr><th>Робота</th><th class="hide-m">Моделі</th><th class="r hide-m">Н/год</th><th class="r">Робота</th><th class="r">Запчастини</th><th></th></tr>`;
+  let last = null;
+  for (const o of ops){
+    if (o.category !== last){ html += `<tr class="cat-row"><td colspan="6">${esc(o.category)}</td></tr>`; last = o.category; }
+    html += `<tr><td>${esc(o.name)}<div class="sub">${esc(o.code)}${o.interval ? " · " + esc(o.interval) : ""}${o.parts.length ? " · " + o.parts.map(p => esc(p.name)).join(", ") : ""}<span class="show-m"> · ${esc(o.models)} · ${String(o.hours).replace(".", ",")} н/год</span></div></td>
+      <td class="hide-m">${esc(o.models)}</td><td class="r hide-m">${String(o.hours).replace(".", ",")}</td>
+      <td class="r">${num(o.labor_price)} ${cur}</td><td class="r">${o.parts.length ? num(o.parts_price) + " " + cur : "—"}</td>
+      <td class="r"><button data-add="${esc(o.code)}" title="Додати до замовлення-наряду">＋</button></td></tr>`;
+  }
+  $("#catalogList").innerHTML = html + "</table></div>";
+}
+$("#btnCatalog").onclick = async () => {
+  $("#catalogDlg").showModal();
+  if (catalogData) return renderCatalog();
+  try{
+    catalogData = await api("/api/catalog");
+    $("#catCategory").innerHTML += catalogData.categories.map(c => `<option>${esc(c)}</option>`).join("");
+    renderCatalog();
+  }catch(e){ $("#catalogList").textContent = e.message; }
+};
+$("#catQuery").oninput = () => catalogData && renderCatalog();
+$("#catCategory").onchange = () => catalogData && renderCatalog();
+$("#closeCatalog").onclick = () => $("#catalogDlg").close();
+$("#catalogList").addEventListener("click", e => {
+  const code = e.target.dataset.add;
+  if (!code) return;
+  const op = catalogData.operations.find(o => o.code === code);
+  $("#catalogDlg").close();
+  document.querySelector('.tabs button[data-tab="chat"]').click();
+  send(`Додай роботу ${op.code} — ${op.name}`);
+});
 $("#btnNew").onclick = async () => {
   if (busy) return;
   await api("/api/reset", {method: "POST"});

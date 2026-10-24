@@ -46,8 +46,7 @@ def test_operation_adds_parts_and_totals(session):
     assert t["labor"] == Decimal("132.00")
     assert t["parts"] == Decimal("165.00")
     assert t["total"] == Decimal("297.00")
-    # ПДВ 20% у складі суми
-    assert t["vat"] == Decimal("49.50")
+    assert t["vat"] == Decimal("0.00")  # ПДВ не нараховується
 
 
 def test_vat_on_top():
@@ -130,3 +129,37 @@ def test_print_header_shows_only_filled_details():
     assert "тел." not in html and "ЄДРПОУ" not in html
     html = render_html(order, {"name": "S", "phone": "+380 48 000 00 00", "inn": "123"})
     assert "<b>S</b><br>тел. +380 48 000 00 00 · ЄДРПОУ 123</div>" in html
+
+
+def test_vat_line_hidden_when_zero():
+    from tesla_ro.render import render_html
+
+    order = RepairOrder(number="x", vat_percent=0)
+    assert "ПДВ" not in render_html(order)
+    order.vat_percent = 20
+    assert "у т.ч. ПДВ 20%" in render_html(order)
+
+
+def test_catalog_integrity(session):
+    cat = session.catalog
+    assert cat.vat_percent == 0
+    assert len(cat.operations) >= 60 and len(cat.categories()) >= 8
+    for op in cat.operations.values():
+        assert op.category, op.code
+        assert op.hours > 0, op.code
+        assert all(p in cat.parts for p in op.parts), op.code
+        assert all(m == "*" or m in {"MODEL_S", "MODEL_3", "MODEL_X", "MODEL_Y", "CYBERTRUCK"} for m in op.models), op.code
+
+
+def test_maintenance_schedule_follows_model(session):
+    fill(session)  # Model 3
+    codes = {o["code"] for o in json.loads(session.get_maintenance_schedule())}
+    assert {"HVAC-FILTER", "TIRE-ROT", "BRK-FLUID-TEST"} <= codes
+    assert "HVAC-HEPA" not in codes and "HVAC-FILTER-SX" not in codes
+    assert all(o["interval"] for o in json.loads(session.get_maintenance_schedule()))
+
+
+def test_search_ranks_best_match_first(session):
+    found = json.loads(session.search_operations("заміна передніх гальмівних колодок"))
+    assert found[0]["code"] == "BRK-PAD-F"
+    assert found[0]["category"] == "Гальмівна система" and found[0]["parts_price"] == 150

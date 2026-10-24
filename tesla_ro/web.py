@@ -190,6 +190,24 @@ def create_app(
             conv.session, conv.assistant = fresh.session, fresh.assistant
         return {"order": None}
 
+    @app.get("/api/catalog")
+    def catalog_view():
+        names = {"MODEL_S": "Model S", "MODEL_3": "Model 3", "MODEL_X": "Model X", "MODEL_Y": "Model Y",
+                 "CYBERTRUCK": "Cybertruck"}
+        ops = []
+        for o in catalog.operations.values():
+            parts = [catalog.parts[p] for p in o.parts if p in catalog.parts]
+            ops.append({
+                "code": o.code, "name": o.name, "category": o.category, "hours": o.hours,
+                "models": "усі" if "*" in o.models else ", ".join(names.get(m, m) for m in o.models),
+                "labor_price": round(o.hours * catalog.labor_rate, 2),
+                "parts": [{"part_no": p.part_no, "name": p.name, "price": p.price} for p in parts],
+                "parts_price": round(sum(p.price for p in parts), 2),
+                "interval": o.interval,
+            })
+        return {"categories": catalog.categories(), "operations": ops, "currency": catalog.currency,
+                "labor_rate": catalog.labor_rate}
+
     @app.get("/api/orders")
     def orders():
         return [

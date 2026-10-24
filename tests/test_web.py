@@ -157,3 +157,14 @@ def test_no_password_mode_is_open(tmp_path):
     client, _ = make_client([])
     web = TestClient(create_app(orders_dir=tmp_path, client=client))
     assert web.get("/api/state").json()["auth"] is False
+
+
+def test_catalog_endpoint(tmp_path):
+    client, _ = make_client([])
+    web = TestClient(create_app(orders_dir=tmp_path, client=client))
+    data = web.get("/api/catalog").json()
+    assert "Гальмівна система" in data["categories"] and data["currency"] == "$"
+    pads = next(o for o in data["operations"] if o["code"] == "BRK-PAD-F")
+    assert pads["labor_price"] == 72 and pads["parts_price"] == 150 and pads["models"] == "усі"
+    filt = next(o for o in data["operations"] if o["code"] == "HVAC-FILTER")
+    assert filt["models"] == "Model 3, Model Y" and filt["interval"] == "кожні 2 роки"
