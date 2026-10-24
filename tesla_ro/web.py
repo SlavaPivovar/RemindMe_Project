@@ -206,10 +206,9 @@ def create_app(
         for o in operations.values():
             op_parts = [parts[p] for p in o.parts if p in parts]
             ops.append({
-                "code": o.code, "name": o.name, "category": o.category, "hours": o.hours,
+                "code": o.code, "name": o.name, "category": o.category, "price": o.price,
                 "model_codes": o.models,
                 "models": "усі" if "*" in o.models else ", ".join(model_names.get(m, m) for m in o.models),
-                "labor_price": round(o.hours * catalog.labor_rate, 2),
                 "parts": [{"part_no": p.part_no, "name": p.name, "price": p.price} for p in op_parts],
                 "parts_price": round(sum(p.price for p in op_parts), 2),
                 "interval": o.interval,
@@ -220,12 +219,10 @@ def create_app(
                 used[p] = used.get(p, 0) + 1
         return {
             "categories": catalog.categories(), "operations": ops, "currency": catalog.currency,
-            "labor_rate": catalog.labor_rate,
             "parts": [{"part_no": p.part_no, "name": p.name, "price": p.price, "unit": p.unit,
                        "used": used.get(p.part_no, 0)} for p in parts.values()],
             "models": [{"code": m, "name": model_names[m]} for m in MODEL_CODES],
-            "settings": {**catalog.service, "labor_rate_per_hour": catalog.labor_rate,
-                         "vat_percent": catalog.vat_percent, "prices_include_vat": catalog.prices_include_vat},
+            "settings": {**catalog.service, "vat_percent": catalog.vat_percent, "prices_include_vat": catalog.prices_include_vat},
         }
 
     def edit(action, *args):

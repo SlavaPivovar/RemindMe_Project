@@ -40,7 +40,7 @@ class OrderSession:
             self.new_order, self.open_order, self.set_customer, self.set_vehicle, self.decode_vin,
             self.add_complaint, self.set_diagnosis, self.add_recommendation,
             self.search_operations, self.get_maintenance_schedule, self.search_parts, self.add_operation, self.add_custom_labor,
-            self.add_part, self.add_custom_part, self.set_discount, self.remove_line,
+            self.add_part, self.add_custom_part, self.set_line, self.set_discount, self.remove_line,
             self.get_order, self.save_order,
         ]
 
@@ -180,8 +180,7 @@ class OrderSession:
 
     def _op_info(self, o) -> dict:
         parts_price = sum(self.catalog.parts[p].price for p in o.parts if p in self.catalog.parts)
-        return {"code": o.code, "name": o.name, "category": o.category, "hours": o.hours,
-                "labor_price": round(o.hours * self.catalog.labor_rate, 2), "parts": o.parts,
+        return {"code": o.code, "name": o.name, "category": o.category, "price": o.price, "parts": o.parts,
                 "parts_price": round(parts_price, 2), "interval": o.interval}
 
     def search_parts(self, query: str) -> str:
@@ -194,13 +193,17 @@ class OrderSession:
 
     # --- рядки замовлення ---
 
-    def add_operation(self, code: str, include_parts: bool = True, hours: float | None = None) -> str:
-        """Додати роботу з довідника за кодом. За замовчуванням додаються й типові запчастини до неї.
+    def add_operation(
+        self, code: str, include_parts: bool = True, qty: float = 1, price: float | None = None
+    ) -> str:
+        """Додати роботу з довідника за кодом за фіксованою ціною з довідника.
+        За замовчуванням додаються й типові запчастини до неї (у тій самій кількості).
 
         Args:
             code: Код роботи з довідника (search_operations).
             include_parts: Додати типові запчастини/матеріали для цієї роботи.
-            hours: Нормогодини, якщо треба змінити норматив (наприклад, для двох сторін).
+            qty: Кількість (наприклад, 2 — для обох сторін, якщо робота вказана на одну сторону).
+            price: Інша ціна за одиницю — лише якщо майстер прямо назвав іншу ціну для цього замовлення.
         """
         op = self.catalog.operations.get(code)
         if op is None:
@@ -208,25 +211,30 @@ class OrderSession:
         order = self._order
         if not op.fits(order.vehicle.model_code or None):
             raise ToolError(f"Робота {code} не застосовна до {order.vehicle.model}")
-        order.labor.append(LaborLine(code=op.code, name=op.name, hours=hours or op.hours, rate=self.catalog.labor_rate))
+        if qty <= 0:
+            raise ToolError("Кількість має бути більша за нуль")
+        if price is not None and price < 0:
+            raise ToolError("Ціна не може бути від'ємною")
+        order.labor.append(LaborLine(code=op.code, name=op.name, price=op.price if price is None else price, qty=qty))
         added_parts = []
         if include_parts:
             for part_no in op.parts:
-                self._add_part_line(part_no, 1)
+                self._add_part_line(part_no, qty)
                 added_parts.append(part_no)
         return _json({"added_labor": op.code, "added_parts": added_parts, "totals": self._totals()})
 
-    def add_custom_labor(self, name: str, hours: float, code: str = "CUSTOM") -> str:
-        """Додати роботу, якої немає в довіднику (за ставкою нормогодини сервісу).
+    def add_custom_labor(self, name: str, price: float, qty: float = 1, code: str = "CUSTOM") -> str:
+        """Додати роботу, якої немає в довіднику (ціну називає майстер).
 
         Args:
             name: Назва роботи.
-            hours: Нормогодини.
+            price: Ціна за одиницю.
+            qty: Кількість.
             code: Код роботи, якщо є.
         """
-        if hours <= 0:
-            raise ToolError("Нормогодини мають бути більші за нуль")
-        self._order.labor.append(LaborLine(code=code, name=name, hours=hours, rate=self.catalog.labor_rate))
+        if price < 0 or qty <= 0:
+            raise ToolError("Ціна має бути невід'ємною, кількість — більшою за нуль")
+        self._order.labor.append(LaborLine(code=code, name=name, price=price, qty=qty))
         return _json({"totals": self._totals()})
 
     def add_part(self, part_no: str, qty: float = 1) -> str:
@@ -288,6 +296,27 @@ class OrderSession:
         for line in targets:
             line.discount_percent = percent
         return _json({"totals": self._totals()})
+
+    def set_line(self, kind: str, line_number: int, price: float | None = None, qty: float | None = None) -> str:
+        """Змінити ціну за одиницю та/або кількість рядка в поточному замовленні (довідник не змінюється).
+        Використовуй, лише коли майстер прямо просить іншу ціну чи кількість.
+
+        Args:
+            kind: 'labor' — роботи, 'parts' — запчастини.
+            line_number: Номер рядка (з 1), як у get_order.
+            price: Нова ціна за одиницю.
+            qty: Нова кількість.
+        """
+        if price is None and qty is None:
+            raise ToolError("Вкажіть нову ціну або кількість")
+        if (price is not None and price < 0) or (qty is not None and qty <= 0):
+            raise ToolError("Ціна має бути невід'ємною, кількість — більшою за нуль")
+        line = self._line(self._lines(kind), line_number)
+        if price is not None:
+            line.price = price
+        if qty is not None:
+            line.qty = qty
+        return _json({"line": line.name, "price": line.price, "qty": line.qty, "totals": self._totals()})
 
     def remove_line(self, kind: str, line_number: int) -> str:
         """Видалити рядок із замовлення.

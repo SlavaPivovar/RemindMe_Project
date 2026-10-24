@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from tesla_ro.catalog import DEFAULT_CATALOG, Catalog, CatalogError
 from tesla_ro.web import create_app
 
-OP = {"code": "brk-test", "name": "Тестова робота", "category": "Гальмівна система", "hours": "1,5",
+OP = {"code": "brk-test", "name": "Тестова робота", "category": "Гальмівна система", "price": "95,5",
       "models": ["MODEL_3", "MODEL_Y"], "parts": ["pad-f"], "interval": ""}
 
 
@@ -25,12 +25,12 @@ def test_first_start_copies_default(tmp_path):
 
 def test_operation_crud_persists(catalog):
     op = catalog.save_operation(OP, create=True)
-    assert (op.code, op.hours, op.parts) == ("BRK-TEST", 1.5, ["PAD-F"])
+    assert (op.code, op.price, op.parts) == ("BRK-TEST", 95.5, ["PAD-F"])
     with pytest.raises(CatalogError, match="уже є"):
         catalog.save_operation(OP, create=True)
-    catalog.save_operation({**OP, "code": "BRK-TEST", "hours": 2, "models": ["*", "MODEL_S"]}, create=False)
+    catalog.save_operation({**OP, "code": "BRK-TEST", "price": 120, "models": ["*", "MODEL_S"]}, create=False)
     reloaded = Catalog.load(catalog.path)
-    assert reloaded.operations["BRK-TEST"].hours == 2 and reloaded.operations["BRK-TEST"].models == ["*"]
+    assert reloaded.operations["BRK-TEST"].price == 120 and reloaded.operations["BRK-TEST"].models == ["*"]
     catalog.delete_operation("BRK-TEST")
     assert "BRK-TEST" not in Catalog.load(catalog.path).operations
     with pytest.raises(KeyError):
@@ -40,8 +40,8 @@ def test_operation_crud_persists(catalog):
 @pytest.mark.parametrize("bad, message", [
     ({"code": "з пробілом"}, "латинські"),
     ({"name": "  "}, "Назва"),
-    ({"hours": "0"}, "Нормогодини"),
-    ({"hours": "abc"}, "числом"),
+    ({"price": "-1"}, "Ціна"),
+    ({"price": "abc"}, "числом"),
     ({"models": []}, "модель"),
     ({"models": ["MODEL_Z"]}, "Невідома модель"),
     ({"parts": ["NOPE"]}, "NOPE"),
@@ -71,12 +71,11 @@ def test_failed_write_rolls_back(catalog, monkeypatch):
 
 
 def test_settings(catalog):
-    catalog.update_settings({"name": "DK", "address": "Одеса", "labor_rate_per_hour": "75",
-                             "vat_percent": 0})
+    catalog.update_settings({"name": "DK", "address": "Одеса", "vat_percent": "7,5"})
     reloaded = Catalog.load(catalog.path)
-    assert reloaded.service["name"] == "DK" and reloaded.labor_rate == 75
+    assert reloaded.service["name"] == "DK" and reloaded.vat_percent == 7.5
     with pytest.raises(CatalogError):
-        catalog.update_settings({"name": "", "labor_rate_per_hour": 1, "vat_percent": 0})
+        catalog.update_settings({"name": "", "vat_percent": 0})
 
 
 def test_default_catalog_untouched_without_path(tmp_path):
@@ -94,17 +93,17 @@ def test_api_edit_flow(tmp_path):
     web.post("/login", data={"password": "secret-pass"})
     data = web.post("/api/catalog/operations", json=OP).json()
     op = next(o for o in data["operations"] if o["code"] == "BRK-TEST")
-    assert op["labor_price"] == 90 and op["models"] == "Model 3, Model Y"
+    assert op["price"] == 95.5 and op["models"] == "Model 3, Model Y"
 
     r = web.post("/api/catalog/operations", json=OP)
     assert r.status_code == 400 and "уже є" in r.json()["error"]
     assert web.put("/api/catalog/operations/NOPE", json=OP).status_code == 404
 
-    web.put("/api/catalog/settings", json={"name": "DK-TeslaService", "address": "м. Одеса",
-                                            "labor_rate_per_hour": 80, "vat_percent": 0})
+    web.put("/api/catalog/operations/BRK-TEST", json={**OP, "price": 110})
+    web.put("/api/catalog/settings", json={"name": "DK-TeslaService", "address": "м. Одеса", "vat_percent": 0})
     data = web.get("/api/catalog").json()
-    assert next(o for o in data["operations"] if o["code"] == "BRK-TEST")["labor_price"] == 120
-    assert data["settings"]["labor_rate_per_hour"] == 80
+    assert next(o for o in data["operations"] if o["code"] == "BRK-TEST")["price"] == 110
+    assert data["settings"]["address"] == "м. Одеса" and "labor_rate_per_hour" not in data["settings"]
 
     r = web.delete("/api/catalog/parts/PAD-F")
     assert r.status_code == 400 and "використовується" in r.json()["error"]
@@ -113,16 +112,33 @@ def test_api_edit_flow(tmp_path):
     # нова сесія сервера читає збережений файл
     again = TestClient(create_app(path, tmp_path / "orders"))
     assert any(o["code"] == "BRK-TEST" for o in again.get("/api/catalog").json()["operations"])
-    assert json.loads(path.read_text(encoding="utf-8"))["labor_rate_per_hour"] == 80
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert next(o for o in saved["operations"] if o["code"] == "BRK-TEST")["price"] == 110
 
 
-def test_new_orders_use_edited_rate(tmp_path):
+def test_new_orders_use_edited_price(tmp_path):
     from tesla_ro.order import OrderStore
     from tesla_ro.tools import OrderSession
 
     cat = Catalog.load_editable(tmp_path / "catalog.json")
-    cat.update_settings({"name": "DK", "labor_rate_per_hour": 100, "vat_percent": 0})
+    diag = cat.operations["DIAG-01"]
+    cat.save_operation({**diag.__dict__, "price": 100}, create=False)
     session = OrderSession(cat, OrderStore(tmp_path / "orders"))
     session.new_order()
     session.add_operation("DIAG-01")
     assert str(session.order.totals()["labor"]) == "100.00"
+
+
+def test_legacy_catalog_with_hours_is_converted(tmp_path):
+    path = tmp_path / "catalog.json"
+    legacy = {"service": {"name": "S"}, "currency": "$", "vat_percent": 0, "labor_rate_per_hour": 70,
+              "operations": [{"code": "OLD-1", "name": "Стара робота", "hours": 1.5, "models": ["*"],
+                              "parts": [], "category": "Діагностика", "interval": ""}],
+              "parts": []}
+    path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+    cat = Catalog.load_editable(path)
+    assert cat.operations["OLD-1"].price == 105
+    saved = json.loads(path.read_text(encoding="utf-8"))  # файл одразу переписано в новому форматі
+    assert "labor_rate_per_hour" not in saved and saved["operations"][0] == {
+        "code": "OLD-1", "name": "Стара робота", "price": 105, "models": ["*"], "parts": [],
+        "category": "Діагностика", "interval": ""}

@@ -146,7 +146,7 @@ def test_catalog_integrity(session):
     assert len(cat.operations) >= 60 and len(cat.categories()) >= 8
     for op in cat.operations.values():
         assert op.category, op.code
-        assert op.hours > 0, op.code
+        assert op.price >= 0, op.code
         assert all(p in cat.parts for p in op.parts), op.code
         assert all(m == "*" or m in {"MODEL_S", "MODEL_3", "MODEL_X", "MODEL_Y", "CYBERTRUCK"} for m in op.models), op.code
 
@@ -163,3 +163,34 @@ def test_search_ranks_best_match_first(session):
     found = json.loads(session.search_operations("заміна передніх гальмівних колодок"))
     assert found[0]["code"] == "BRK-PAD-F"
     assert found[0]["category"] == "Гальмівна система" and found[0]["parts_price"] == 150
+
+
+def test_operation_both_sides_and_line_edit(session):
+    fill(session)
+    session.add_operation("SUSP-ARM-LF", qty=2)
+    line = session.order.labor[0]
+    assert (line.price, line.qty) == (96, 2) and session.order.parts[0].qty == 2
+    session.set_line("labor", 1, price=90)
+    assert session.order.totals()["labor"] == Decimal("180.00")
+    session.set_line("parts", 1, qty=1)
+    assert session.order.totals()["parts"] == Decimal("170.00")
+    with pytest.raises(ToolError):
+        session.set_line("labor", 1)
+    with pytest.raises(ToolError):
+        session.set_line("labor", 1, qty=0)
+
+
+def test_custom_labor_and_price_override(session):
+    fill(session)
+    session.add_custom_labor("Нестандартна робота", 55.5)
+    session.add_operation("DIAG-01", price=0)
+    assert [l.price for l in session.order.labor] == [55.5, 0]
+
+
+def test_legacy_order_with_hours_loads(session):
+    legacy = {"number": "ЗН-2025-00001", "labor": [{"code": "DIAG-01", "name": "Діагностика", "hours": 1.5,
+                                                   "rate": 6500, "discount_percent": 10}],
+              "parts": [], "currency": "₽"}
+    order = RepairOrder.from_dict(legacy)
+    assert (order.labor[0].price, order.labor[0].qty) == (9750, 1)
+    assert order.totals()["total"] == Decimal("8775.00")

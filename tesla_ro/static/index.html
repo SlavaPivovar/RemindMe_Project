@@ -212,10 +212,10 @@ function renderOrder(o){
   const c = o.customer, v = o.vehicle, t = o.totals, cur = esc(o.currency);
   const lines = (rows, isLabor) => rows.length ? rows.map((l, i) => `<tr>
       <td>${i + 1}</td><td>${esc(isLabor ? l.code : l.part_no)}</td><td>${esc(l.name)}</td>
-      <td class="r">${isLabor ? String(l.hours).replace(".", ",") : String(l.qty).replace(".", ",") + " " + esc(l.unit)}</td>
-      <td class="r">${num(isLabor ? l.rate : l.price)}</td>
+      <td class="r">${String(l.qty).replace(".", ",")}${isLabor ? "" : " " + esc(l.unit)}</td>
+      <td class="r">${num(l.price)}</td>
       <td class="r">${l.discount_percent ? esc(l.discount_percent) + "%" : ""}</td>
-      <td class="r">${num((isLabor ? l.hours * l.rate : l.qty * l.price) * (1 - l.discount_percent / 100))}</td></tr>`).join("")
+      <td class="r">${num(l.qty * l.price * (1 - l.discount_percent / 100))}</td></tr>`).join("")
     : `<tr><td colspan="7" style="color:var(--muted)">—</td></tr>`;
   const vat = o.prices_include_vat ? `у т.ч. ПДВ ${esc(o.vat_percent)}%` : `ПДВ ${esc(o.vat_percent)}%`;
   box.innerHTML = `
@@ -234,7 +234,7 @@ function renderOrder(o){
     ${o.complaints.length ? `<ul class="plain">${o.complaints.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : `<div style="color:var(--muted)">—</div>`}
     ${o.diagnosis ? `<h3>Діагностика</h3><div>${esc(o.diagnosis)}</div>` : ""}
     <h3>Роботи</h3>
-    <div class="tbl"><table><tr><th>№</th><th>Код</th><th>Найменування</th><th class="r">Н/год</th><th class="r">Ціна н/год</th><th class="r">Знижка</th><th class="r">Сума</th></tr>${lines(o.labor, true)}</table></div>
+    <div class="tbl"><table><tr><th>№</th><th>Код</th><th>Найменування</th><th class="r">Кількість</th><th class="r">Ціна</th><th class="r">Знижка</th><th class="r">Сума</th></tr>${lines(o.labor, true)}</table></div>
     <h3>Запчастини та матеріали</h3>
     <div class="tbl"><table><tr><th>№</th><th>Артикул</th><th>Найменування</th><th class="r">Кількість</th><th class="r">Ціна</th><th class="r">Знижка</th><th class="r">Сума</th></tr>${lines(o.parts, false)}</table></div>
     <div class="totals">
@@ -366,7 +366,7 @@ $("#closeDlg").onclick = () => $("#ordersDlg").close();
 
 // ---------- Довідник: перегляд і редагування ----------
 let catalogData = null, catView = "ops", catQuery = "", catCategory = "", partQuery = "", catFlash = "";
-const fmtHours = h => String(h).replace(".", ",");
+const fmtNum = n => String(n).replace(".", ",");
 
 function setCatalog(data){
   catalogData = data;
@@ -403,13 +403,13 @@ function renderOpsTable(){
   const ops = catalogData.operations.filter(o => (!catCategory || o.category === catCategory) &&
     words.every(w => `${o.code} ${o.name} ${o.category} ${o.parts.map(p => p.name).join(" ")}`.toLowerCase().includes(w)));
   if (!ops.length){ $("#opsTable").innerHTML = `<div class="empty">Нічого не знайдено.</div>`; return; }
-  let html = `<div class="tbl"><table><tr><th>Робота</th><th class="hide-m">Моделі</th><th class="r hide-m">Н/год</th><th class="r">Робота</th><th class="r">Запчастини</th><th></th></tr>`;
+  let html = `<div class="tbl"><table><tr><th>Робота</th><th class="hide-m">Моделі</th><th class="r">Ціна роботи</th><th class="r">Запчастини</th><th></th></tr>`;
   let last = null;
   for (const o of [...ops].sort((a, b) => catalogData.categories.indexOf(a.category) - catalogData.categories.indexOf(b.category))){
-    if (o.category !== last){ html += `<tr class="cat-row"><td colspan="6">${esc(o.category)}</td></tr>`; last = o.category; }
-    html += `<tr><td>${esc(o.name)}<div class="sub">${esc(o.code)}${o.interval ? " · " + esc(o.interval) : ""}${o.parts.length ? " · " + o.parts.map(p => esc(p.name)).join(", ") : ""}<span class="show-m"> · ${esc(o.models)} · ${fmtHours(o.hours)} н/год</span></div></td>
-      <td class="hide-m">${esc(o.models)}</td><td class="r hide-m">${fmtHours(o.hours)}</td>
-      <td class="r">${num(o.labor_price)} ${cur}</td><td class="r">${o.parts.length ? num(o.parts_price) + " " + cur : "—"}</td>
+    if (o.category !== last){ html += `<tr class="cat-row"><td colspan="5">${esc(o.category)}</td></tr>`; last = o.category; }
+    html += `<tr><td>${esc(o.name)}<div class="sub">${esc(o.code)}${o.interval ? " · " + esc(o.interval) : ""}${o.parts.length ? " · " + o.parts.map(p => esc(p.name)).join(", ") : ""}<span class="show-m"> · ${esc(o.models)}</span></div></td>
+      <td class="hide-m">${esc(o.models)}</td>
+      <td class="r">${num(o.price)} ${cur}</td><td class="r">${o.parts.length ? num(o.parts_price) + " " + cur : "—"}</td>
       <td class="r acts"><button data-edit-op="${esc(o.code)}" title="Редагувати">✎</button> <button data-add="${esc(o.code)}" title="Додати до замовлення-наряду">＋</button></td></tr>`;
   }
   $("#opsTable").innerHTML = html + "</table></div>";
@@ -453,7 +453,7 @@ function opForm(code){
         ${o ? "" : `<div class="hint">Латинські літери, цифри, дефіс. Потім змінити не можна.</div>`}</div>
       <label for="fName">Назва</label><input id="fName" value="${esc(o ? o.name : "")}">
       <label for="fCat">Розділ</label><input id="fCat" list="catCategories" value="${esc(o ? o.category : catCategory)}" placeholder="оберіть або введіть новий">
-      <label for="fHours">Нормогодини</label><input id="fHours" inputmode="decimal" value="${o ? fmtHours(o.hours) : ""}" placeholder="напр. 1,5">
+      <label for="fPrice">Ціна роботи, ${esc(catalogData.currency)}</label><input id="fPrice" inputmode="decimal" value="${o ? fmtNum(o.price) : ""}" placeholder="напр. 80">
       <label>Моделі</label>
       <div class="checks" id="fModels">
         <label><input type="checkbox" value="*" ${models.includes("*") ? "checked" : ""}> усі</label>
@@ -485,7 +485,7 @@ function opForm(code){
     e.preventDefault();
     const all = $('#fModels input[value="*"]').checked;
     const body = {
-      code: $("#fCode").value, name: $("#fName").value, category: $("#fCat").value, hours: $("#fHours").value,
+      code: $("#fCode").value, name: $("#fName").value, category: $("#fCat").value, price: $("#fPrice").value,
       models: all ? ["*"] : [...document.querySelectorAll('#fModels input:checked')].map(c => c.value),
       parts, interval: $("#fInterval").value,
     };
@@ -538,7 +538,6 @@ function renderSettingsForm(flash){
       <label for="sAddr">Адреса</label><input id="sAddr" value="${esc(s.address)}">
       <label for="sPhone">Телефон</label><input id="sPhone" value="${esc(s.phone)}" placeholder="не друкується, якщо порожньо">
       <label for="sInn">ЄДРПОУ</label><input id="sInn" value="${esc(s.inn)}" placeholder="не друкується, якщо порожньо">
-      <label for="sRate">Ставка нормогодини, ${esc(catalogData.currency)}</label><input id="sRate" inputmode="decimal" value="${String(s.labor_rate_per_hour).replace(".", ",")}">
       <label for="sVat">ПДВ, %</label>
       <div><input id="sVat" inputmode="decimal" value="${String(s.vat_percent).replace(".", ",")}">
         <div class="checks"><label><input type="checkbox" id="sVatIn" ${s.prices_include_vat ? "checked" : ""}> ціни вже містять ПДВ</label></div>
@@ -551,7 +550,7 @@ function renderSettingsForm(flash){
   $("#setForm").onsubmit = async e => {
     e.preventDefault();
     const body = {name: $("#sName").value, address: $("#sAddr").value, phone: $("#sPhone").value, inn: $("#sInn").value,
-                  labor_rate_per_hour: $("#sRate").value, vat_percent: $("#sVat").value, prices_include_vat: $("#sVatIn").checked};
+                  vat_percent: $("#sVat").value, prices_include_vat: $("#sVatIn").checked};
     if (await saveCatalog("PUT", "/api/catalog/settings", body, "Налаштування збережено", "settings")){
       $("#brand").textContent = catalogData.settings.name; document.title = catalogData.settings.name;
     }

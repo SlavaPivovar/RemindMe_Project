@@ -23,8 +23,8 @@ def render_html(order: RepairOrder, service: dict | None = None) -> str:
     cur = escape(order.currency)
 
     labor_rows = "".join(
-        f"<tr><td>{i}</td><td>{e(l.code)}</td><td>{e(l.name)}</td><td class=r>{_num(l.hours)}</td>"
-        f"<td class=r>{fmt(l.rate)}</td><td class=r>{_num(l.discount_percent)}</td><td class=r>{fmt(l.total)}</td></tr>"
+        f"<tr><td>{i}</td><td>{e(l.code)}</td><td>{e(l.name)}</td><td class=r>{_num(l.qty)}</td>"
+        f"<td class=r>{fmt(l.price)}</td><td class=r>{_num(l.discount_percent)}</td><td class=r>{fmt(l.total)}</td></tr>"
         for i, l in enumerate(order.labor, 1)
     ) or "<tr><td colspan=7>—</td></tr>"
     part_rows = "".join(
@@ -79,7 +79,7 @@ th{{background:#eee;text-align:left}} .r{{text-align:right;white-space:nowrap}}
 {f"<h2>Результати діагностики</h2><p>{e(order.diagnosis)}</p>" if order.diagnosis else ""}
 
 <h2>Роботи</h2>
-<table><tr><th>№</th><th>Код</th><th>Найменування</th><th class=r>Н/год</th><th class=r>Ціна н/год, {cur}</th><th class=r>Знижка, %</th><th class=r>Сума, {cur}</th></tr>
+<table><tr><th>№</th><th>Код</th><th>Найменування</th><th class=r>Кількість</th><th class=r>Ціна, {cur}</th><th class=r>Знижка, %</th><th class=r>Сума, {cur}</th></tr>
 {labor_rows}</table>
 
 <h2>Запасні частини та матеріали</h2>

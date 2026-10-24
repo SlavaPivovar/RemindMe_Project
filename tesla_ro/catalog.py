@@ -23,7 +23,7 @@ class CatalogError(ValueError):
 class Operation:
     code: str
     name: str
-    hours: float
+    price: float  # фіксована ціна роботи
     models: list[str]
     parts: list[str]
     category: str = ""
@@ -49,8 +49,15 @@ class Catalog:
         self.currency: str = data.get("currency", "$")
         self.vat_percent: float = data.get("vat_percent", 0)
         self.prices_include_vat: bool = data.get("prices_include_vat", True)
-        self.labor_rate: float = data["labor_rate_per_hour"]
-        self.operations = {o["code"]: Operation(**o) for o in data["operations"]}
+        # Старий формат довідника (нормогодини × ставка) переводиться у фіксовані ціни.
+        legacy_rate = data.get("labor_rate_per_hour", 0)
+        self.operations = {}
+        for o in data["operations"]:
+            o = dict(o)
+            if "hours" in o:
+                hours = o.pop("hours")
+                o.setdefault("price", round(hours * legacy_rate, 2))
+            self.operations[o["code"]] = Operation(**o)
         self.parts = {p["part_no"]: Part(**p) for p in data["parts"]}
 
     @classmethod
@@ -65,7 +72,10 @@ class Catalog:
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(default, path)
-        return cls.load(path)
+        catalog = cls.load(path)
+        if "labor_rate_per_hour" in json.loads(path.read_text(encoding="utf-8")):
+            catalog.save()  # файл старого формату одразу переписуємо з фіксованими цінами
+        return catalog
 
     # --- збереження ---
 
@@ -75,7 +85,6 @@ class Catalog:
             "currency": self.currency,
             "vat_percent": self.vat_percent,
             "prices_include_vat": self.prices_include_vat,
-            "labor_rate_per_hour": self.labor_rate,
             "operations": [asdict(o) for o in self.operations.values()],
             "parts": [asdict(p) for p in self.parts.values()],
         }
@@ -146,7 +155,7 @@ class Catalog:
         op = Operation(
             code=code,
             name=self._text(data.get("name"), "Назва", 200),
-            hours=self._number(data.get("hours"), "Нормогодини", 0, 100, strict_low=True),
+            price=self._number(data.get("price"), "Ціна", 0, 1_000_000),
             models=models,
             parts=parts,
             category=self._text(data.get("category"), "Розділ", 60),
@@ -201,10 +210,9 @@ class Catalog:
             "phone": self._text(data.get("phone"), "Телефон", 50, required=False),
             "inn": self._text(data.get("inn"), "ЄДРПОУ", 20, required=False),
         }
-        labor_rate = self._number(data.get("labor_rate_per_hour"), "Ставка нормогодини", 0, 100_000)
         vat = self._number(data.get("vat_percent"), "ПДВ", 0, 100)
         with self.lock:
-            self._commit(service=service, labor_rate=labor_rate, vat_percent=vat,
+            self._commit(service=service, vat_percent=vat,
                          prices_include_vat=bool(data.get("prices_include_vat", self.prices_include_vat)))
 
     def search_operations(self, query: str, model_code: str | None = None) -> list[Operation]:

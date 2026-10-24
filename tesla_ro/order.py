@@ -38,13 +38,21 @@ class Vehicle:
 class LaborLine:
     code: str
     name: str
-    hours: float
-    rate: float
+    price: float
+    qty: float = 1
     discount_percent: float = 0
 
     @property
     def total(self) -> Decimal:
-        return money(Decimal(str(self.hours)) * Decimal(str(self.rate)) * (1 - Decimal(str(self.discount_percent)) / 100))
+        return money(Decimal(str(self.qty)) * Decimal(str(self.price)) * (1 - Decimal(str(self.discount_percent)) / 100))
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LaborLine":
+        data = dict(data)
+        if "hours" in data:
+            # Старий формат (нормогодини × ставка) — переводимо у фіксовану ціну рядка.
+            data["price"] = float(money(Decimal(str(data.pop("hours"))) * Decimal(str(data.pop("rate", 0)))))
+        return cls(**data)
 
 
 @dataclass
@@ -117,7 +125,7 @@ class RepairOrder:
         data.pop("totals", None)
         data["customer"] = Customer(**data.get("customer", {}))
         data["vehicle"] = Vehicle(**data.get("vehicle", {}))
-        data["labor"] = [LaborLine(**x) for x in data.get("labor", [])]
+        data["labor"] = [LaborLine.from_dict(x) for x in data.get("labor", [])]
         data["parts"] = [PartLine(**x) for x in data.get("parts", [])]
         return cls(**data)
 
