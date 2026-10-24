@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+import html
 import os
 import secrets
 import threading
@@ -60,7 +61,8 @@ def create_app(
     client = client or anthropic.Anthropic()
     conversations: dict[str, Conversation] = {}
     conversations_lock = threading.Lock()
-    app = FastAPI(title="Замовлення-наряди Tesla", docs_url=None, redoc_url=None, openapi_url=None)
+    service_name = catalog.service.get("name") or "Замовлення-наряди Tesla"
+    app = FastAPI(title=service_name, docs_url=None, redoc_url=None, openapi_url=None)
     auth_key = hashlib.sha256(f"{secrets.token_hex(32)}:{password}".encode()).digest()
     failures: dict[str, list[float]] = {}
     failures_lock = threading.Lock()
@@ -87,9 +89,9 @@ def create_app(
 
     @app.get("/login", response_class=HTMLResponse)
     def login_page(error: str = ""):
-        return (STATIC / "login.html").read_text(encoding="utf-8").replace(
-            "<!--ERROR-->", '<p class="err">Невірний пароль</p>' if error else ""
-        )
+        page = (STATIC / "login.html").read_text(encoding="utf-8")
+        page = page.replace("<!--NAME-->", html.escape(service_name))
+        return page.replace("<!--ERROR-->", '<p class="err">Невірний пароль</p>' if error else "")
 
     @app.post("/login")
     def login(request: Request, password_input: str = Form("", alias="password")):

@@ -13,14 +13,14 @@ from .order import OrderStore
 from .tools import OrderSession
 
 BANNER = """\
-Помічник з оформлення замовлень-нарядів Tesla.
+DK-TeslaService — помічник з оформлення замовлень-нарядів Tesla.
 Опишіть клієнта, автомобіль і проблему — помічник підбере роботи та запчастини.
 Команди: /замовлення — показати поточне замовлення, /вихід — завершити.
 """
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Помічник із замовлень-нарядів Tesla")
+    parser = argparse.ArgumentParser(description="DK-TeslaService — помічник із замовлень-нарядів Tesla")
     parser.add_argument("--catalog", default=str(DEFAULT_CATALOG), help="JSON-довідник робіт і запчастин")
     parser.add_argument("--orders-dir", default="orders", help="каталог для збереження замовлень-нарядів")
     parser.add_argument("--model", default=MODEL)

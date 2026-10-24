@@ -10,7 +10,7 @@ from .tools import OrderSession
 MODEL = "claude-opus-5-5"
 
 SYSTEM_PROMPT = """\
-Ти — помічник майстра-приймальника сервісного центру з ремонту автомобілів Tesla.
+Ти — помічник майстра-приймальника сервісного центру{service} з ремонту автомобілів Tesla.
 Твоє завдання — разом із майстром оформити замовлення-наряд: зібрати дані, підібрати роботи й
 запчастини з довідника та зберегти документ. Завжди відповідай українською (навіть якщо майстер
 пише іншою мовою), коротко й по суті.
@@ -52,6 +52,8 @@ class RepairOrderAssistant:
         self.client = client or anthropic.Anthropic()
         self.model = model
         self.effort = effort
+        name = session.catalog.service.get("name", "")
+        self.system = SYSTEM_PROMPT.replace("{service}", f" {name}" if name else "")
         self.tools = [beta_tool(m) for m in session.tool_methods()]
         self.messages: list = []
 
@@ -81,7 +83,7 @@ class RepairOrderAssistant:
         runner = self.client.beta.messages.tool_runner(
             model=self.model,
             max_tokens=16000,
-            system=SYSTEM_PROMPT,
+            system=self.system,
             tools=self.tools,
             messages=list(self.messages),
             thinking={"type": "adaptive"},

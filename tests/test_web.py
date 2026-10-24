@@ -106,7 +106,7 @@ def test_errors(tmp_path):
 def test_index_served(tmp_path):
     client, _ = make_client([])
     r = TestClient(create_app(orders_dir=tmp_path, client=client)).get("/")
-    assert r.status_code == 200 and "Замовлення-наряди Tesla" in r.text
+    assert r.status_code == 200 and "DK-TeslaService" in r.text
 
 
 def test_password_required(tmp_path, monkeypatch):
@@ -119,7 +119,8 @@ def test_password_required(tmp_path, monkeypatch):
     r = web.get("/", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/login"
     assert web.get("/print/ЗН-2026-00001", follow_redirects=False).status_code == 303
-    assert "Введіть пароль" in web.get("/login").text
+    login = web.get("/login").text
+    assert "введіть пароль" in login and "<h1>DK-TeslaService</h1>" in login
 
     r = web.post("/login", data={"password": "wrong"}, follow_redirects=False)
     assert r.headers["location"] == "/login?error=1"

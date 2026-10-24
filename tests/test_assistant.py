@@ -59,3 +59,8 @@ def test_history_rolled_back_on_error(session):
     except anthropic.BadRequestError:
         pass
     assert assistant.messages == []
+
+
+def test_service_name_in_prompt(session):
+    assistant = RepairOrderAssistant(session, client=anthropic.Anthropic(api_key="test"))
+    assert "сервісного центру DK-TeslaService з ремонту" in assistant.system
