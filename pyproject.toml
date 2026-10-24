@@ -1,0 +1,18 @@
+[project]
+name = "tesla-repair-orders"
+version = "0.1.0"
+description = "AI-помощник для оформления заказ-нарядов на ремонт автомобилей Tesla"
+requires-python = ">=3.10"
+dependencies = ["anthropic>=2.3.0"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+tesla-ro = "tesla_ro.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["tesla_ro*"]
+
+[tool.setuptools.package-data]
+tesla_ro = ["data/*.json"]
