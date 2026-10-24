@@ -2,8 +2,8 @@
   "service": {
     "name": "DK-TeslaService",
     "address": "м. Одеса, вул. Гарманна, 1",
-    "phone": "+380 (00) 000-00-00",
-    "inn": "00000000"
+    "phone": "",
+    "inn": ""
   },
   "currency": "$",
   "vat_percent": 20,

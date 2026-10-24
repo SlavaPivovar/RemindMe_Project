@@ -119,3 +119,14 @@ def test_all_methods_are_valid_tools(session):
         assert t["description"]
         for name, prop in t["input_schema"]["properties"].items():
             assert prop.get("description"), f"{t['name']}.{name} без опису"
+
+
+def test_print_header_shows_only_filled_details():
+    from tesla_ro.render import render_html
+
+    order = RepairOrder(number="x")
+    html = render_html(order, {"name": "DK-TeslaService", "address": "м. Одеса, вул. Гарманна, 1", "phone": "", "inn": ""})
+    assert "<b>DK-TeslaService</b><br>м. Одеса, вул. Гарманна, 1</div>" in html
+    assert "тел." not in html and "ЄДРПОУ" not in html
+    html = render_html(order, {"name": "S", "phone": "+380 48 000 00 00", "inn": "123"})
+    assert "<b>S</b><br>тел. +380 48 000 00 00 · ЄДРПОУ 123</div>" in html

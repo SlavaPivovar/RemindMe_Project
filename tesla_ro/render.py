@@ -34,6 +34,17 @@ def render_html(order: RepairOrder, service: dict | None = None) -> str:
     ) or "<tr><td colspan=7>—</td></tr>"
     complaints = "".join(f"<li>{e(x)}</li>" for x in order.complaints) or "<li>—</li>"
     recs = "".join(f"<li>{e(x)}</li>" for x in order.recommendations)
+    # Реквізити сервісу: показуємо лише заповнені поля.
+    contacts = " · ".join(
+        label + escape(str(service[key])) for key, label in (("phone", "тел. "), ("inn", "ЄДРПОУ ")) if service.get(key)
+    )
+    service_block = "<br>".join(
+        x for x in (
+            f"<b>{escape(str(service['name']))}</b>" if service.get("name") else "",
+            escape(str(service["address"])) if service.get("address") else "",
+            contacts,
+        ) if x
+    )
     vat_label = (
         f"у т.ч. ПДВ {_num(order.vat_percent)}%" if order.prices_include_vat else f"ПДВ {_num(order.vat_percent)}%"
     )
@@ -53,8 +64,7 @@ th{{background:#eee;text-align:left}} .r{{text-align:right;white-space:nowrap}}
 </style></head><body>
 <div class=head><div><h1>ЗАМОВЛЕННЯ-НАРЯД № {e(order.number)}</h1>
 <div>від {e(order.created_at)} · статус: {e(order.status)}</div></div>
-<div style="text-align:right"><b>{e(service.get("name"))}</b><br>{e(service.get("address"))}<br>
-тел. {e(service.get("phone"))} · ЄДРПОУ {e(service.get("inn"))}</div></div>
+<div style="text-align:right">{service_block}</div></div>
 
 <h2>Замовник і автомобіль</h2>
 <table class=grid>
