@@ -3,7 +3,7 @@ name = "tesla-repair-orders"
 version = "0.1.0"
 description = "AI-помощник для оформления заказ-нарядов на ремонт автомобилей Tesla"
 requires-python = ">=3.10"
-dependencies = ["anthropic>=2.3.0", "fastapi>=0.110", "uvicorn>=0.29"]
+dependencies = ["anthropic>=2.3.0", "fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
 
 [project.optional-dependencies]
 dev = ["pytest", "httpx"]

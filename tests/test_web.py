@@ -107,3 +107,52 @@ def test_index_served(tmp_path):
     client, _ = make_client([])
     r = TestClient(create_app(orders_dir=tmp_path, client=client)).get("/")
     assert r.status_code == 200 and "Заказ-наряды Tesla" in r.text
+
+
+def test_password_required(tmp_path, monkeypatch):
+    monkeypatch.setattr("tesla_ro.web.time.sleep", lambda s: None)
+    client, _ = make_client(SCRIPT)
+    web = TestClient(create_app(orders_dir=tmp_path, client=client, password="secret-pass"))
+
+    assert web.get("/api/state").status_code == 401
+    assert web.get("/api/orders").status_code == 401
+    r = web.get("/", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+    assert web.get("/print/ЗН-2026-00001", follow_redirects=False).status_code == 303
+    assert "Введите пароль" in web.get("/login").text
+
+    r = web.post("/login", data={"password": "wrong"}, follow_redirects=False)
+    assert r.headers["location"] == "/login?error=1"
+    assert "Неверный пароль" in web.get("/login?error=1").text
+    assert web.get("/api/state").status_code == 401
+
+    web.post("/login", data={"password": "secret-pass"})
+    state = web.get("/api/state").json()
+    assert state["auth"] is True
+    assert web.post("/api/chat", json={"text": "заказ"}).status_code == 200
+
+    web.get("/logout")
+    assert web.get("/api/state").status_code == 401
+
+
+def test_forged_auth_cookie_rejected(tmp_path):
+    client, _ = make_client([])
+    web = TestClient(create_app(orders_dir=tmp_path, client=client, password="secret-pass"))
+    web.cookies.set("tesla_ro_auth", "9999999999.deadbeef")
+    assert web.get("/api/state").status_code == 401
+
+
+def test_login_rate_limited(tmp_path, monkeypatch):
+    monkeypatch.setattr("tesla_ro.web.time.sleep", lambda s: None)
+    client, _ = make_client([])
+    web = TestClient(create_app(orders_dir=tmp_path, client=client, password="secret-pass"))
+    for _ in range(10):
+        web.post("/login", data={"password": "wrong"}, follow_redirects=False)
+    r = web.post("/login", data={"password": "secret-pass"}, follow_redirects=False)
+    assert r.status_code == 429
+
+
+def test_no_password_mode_is_open(tmp_path):
+    client, _ = make_client([])
+    web = TestClient(create_app(orders_dir=tmp_path, client=client))
+    assert web.get("/api/state").json()["auth"] is False

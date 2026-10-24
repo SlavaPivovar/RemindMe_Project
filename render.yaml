@@ -1,0 +1,17 @@
+# Конфигурация для Render (https://render.com): New → Blueprint → выбрать этот репозиторий.
+services:
+  - type: web
+    name: tesla-repair-orders
+    runtime: docker
+    plan: starter            # постоянный диск доступен на платных тарифах
+    region: frankfurt
+    healthCheckPath: /login
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false          # Render попросит ввести значение при создании
+      - key: APP_PASSWORD
+        sync: false
+    disk:
+      name: orders
+      mountPath: /data
+      sizeGB: 1

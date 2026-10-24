@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
+import os
 import secrets
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import anthropic
-from fastapi import Cookie, FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi import Cookie, FastAPI, Form, HTTPException, Request, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from .assistant import MODEL, RepairOrderAssistant
@@ -21,6 +25,12 @@ from .tools import OrderSession
 
 STATIC = Path(__file__).parent / "static"
 COOKIE = "tesla_ro_sid"
+AUTH_COOKIE = "tesla_ro_auth"
+AUTH_TTL = 30 * 24 * 3600  # вход действует 30 дней
+IDLE_TTL = 12 * 3600  # неактивные диалоги удаляются из памяти через 12 часов
+FAIL_WINDOW = 15 * 60
+MAX_FAILS = 10  # неверных паролей за 15 минут с одного адреса
+MAX_FAILS_TOTAL = 100  # и со всех адресов вместе (адрес за прокси можно подделать)
 
 
 @dataclass
@@ -28,6 +38,7 @@ class Conversation:
     session: OrderSession
     assistant: RepairOrderAssistant
     lock: threading.Lock = field(default_factory=threading.Lock)
+    last_used: float = field(default_factory=time.monotonic)
 
 
 class ChatIn(BaseModel):
@@ -40,25 +51,89 @@ def create_app(
     client: anthropic.Anthropic | None = None,
     model: str = MODEL,
     effort: str = "medium",
+    password: str | None = None,
+    secure_cookies: bool = False,
 ) -> FastAPI:
+    """password — пароль для входа; без него вход не требуется (только для локального запуска)."""
     catalog = Catalog.load(catalog_path)
     store = OrderStore(orders_dir)
     client = client or anthropic.Anthropic()
     conversations: dict[str, Conversation] = {}
     conversations_lock = threading.Lock()
-    app = FastAPI(title="Заказ-наряды Tesla")
+    app = FastAPI(title="Заказ-наряды Tesla", docs_url=None, redoc_url=None, openapi_url=None)
+    auth_key = hashlib.sha256(f"{secrets.token_hex(32)}:{password}".encode()).digest()
+    failures: dict[str, list[float]] = {}
+    failures_lock = threading.Lock()
+
+    def sign(expires: int) -> str:
+        mac = hmac.new(auth_key, str(expires).encode(), hashlib.sha256).hexdigest()
+        return f"{expires}.{mac}"
+
+    def is_authorized(token: str | None) -> bool:
+        if password is None:
+            return True
+        if not token or "." not in token:
+            return False
+        expires = token.split(".", 1)[0]
+        return expires.isdigit() and int(expires) > time.time() and hmac.compare_digest(token, sign(int(expires)))
+
+    @app.middleware("http")
+    async def require_login(request: Request, call_next):
+        if request.url.path in ("/login", "/logout") or is_authorized(request.cookies.get(AUTH_COOKIE)):
+            return await call_next(request)
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"error": "Требуется вход"}, status_code=401)
+        return RedirectResponse("/login", status_code=303)
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(error: str = ""):
+        return (STATIC / "login.html").read_text(encoding="utf-8").replace(
+            "<!--ERROR-->", '<p class="err">Неверный пароль</p>' if error else ""
+        )
+
+    @app.post("/login")
+    def login(request: Request, password_input: str = Form("", alias="password")):
+        ip = request.client.host if request.client else "?"
+        now = time.time()
+        with failures_lock:
+            for key in list(failures):
+                failures[key] = [t for t in failures[key] if now - t < FAIL_WINDOW]
+                if not failures[key]:
+                    del failures[key]
+            total = sum(len(v) for v in failures.values())
+            if len(failures.get(ip, [])) >= MAX_FAILS or total >= MAX_FAILS_TOTAL:
+                return HTMLResponse("Слишком много попыток входа. Попробуйте через 15 минут.", status_code=429)
+        if password is None or hmac.compare_digest(password_input.encode(), password.encode()):
+            resp = RedirectResponse("/", status_code=303)
+            resp.set_cookie(AUTH_COOKIE, sign(int(now) + AUTH_TTL), max_age=AUTH_TTL,
+                            httponly=True, samesite="lax", secure=secure_cookies)
+            return resp
+        with failures_lock:
+            failures.setdefault(ip, []).append(now)
+        time.sleep(1)
+        return RedirectResponse("/login?error=1", status_code=303)
+
+    @app.get("/logout")
+    def logout():
+        resp = RedirectResponse("/login", status_code=303)
+        resp.delete_cookie(AUTH_COOKIE)
+        return resp
 
     def new_conversation() -> Conversation:
         session = OrderSession(catalog, store)
         return Conversation(session, RepairOrderAssistant(session, client=client, model=model, effort=effort))
 
     def conversation(sid: str | None, response: Response) -> Conversation:
+        now = time.monotonic()
         with conversations_lock:
             if sid and sid in conversations:
+                conversations[sid].last_used = now
                 return conversations[sid]
+            for old in [k for k, c in conversations.items() if now - c.last_used > IDLE_TTL]:
+                del conversations[old]
             sid = secrets.token_urlsafe(16)
             conversations[sid] = new_conversation()
-            response.set_cookie(COOKIE, sid, httponly=True, samesite="lax")
+            response.set_cookie(COOKIE, sid, httponly=True, samesite="lax", secure=secure_cookies)
             return conversations[sid]
 
     @app.get("/", response_class=HTMLResponse)
@@ -76,7 +151,8 @@ def create_app(
                 text = "\n".join(b.text for b in m["content"] if getattr(b, "type", None) == "text").strip()
                 if text:
                     history.append({"role": "assistant", "text": text})
-        return {"order": conv.session.snapshot(), "history": history, "service": catalog.service}
+        return {"order": conv.session.snapshot(), "history": history, "service": catalog.service,
+                "auth": password is not None}
 
     @app.post("/api/chat")
     def chat(body: ChatIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
@@ -165,17 +241,30 @@ def create_app(
 def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
+    env = os.environ.get
     parser = argparse.ArgumentParser(description="Веб-интерфейс помощника по заказ-нарядам Tesla")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--catalog", default=str(DEFAULT_CATALOG))
-    parser.add_argument("--orders-dir", default="orders")
-    parser.add_argument("--model", default=MODEL)
-    parser.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"])
+    parser.add_argument("--host", default=env("HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(env("PORT", "8000")))
+    parser.add_argument("--catalog", default=env("CATALOG", str(DEFAULT_CATALOG)))
+    parser.add_argument("--orders-dir", default=env("ORDERS_DIR", "orders"))
+    parser.add_argument("--model", default=env("MODEL", MODEL))
+    parser.add_argument("--effort", default=env("EFFORT", "medium"), choices=["low", "medium", "high", "xhigh", "max"])
     args = parser.parse_args(argv)
-    app = create_app(args.catalog, args.orders_dir, model=args.model, effort=args.effort)
+
+    password = env("APP_PASSWORD") or None
+    local = args.host in ("127.0.0.1", "localhost", "::1")
+    if not local and not password:
+        print("Для доступа из сети задайте пароль: переменная окружения APP_PASSWORD.")
+        return 2
+    if password and len(password) < 8:
+        print("APP_PASSWORD слишком короткий: нужно не меньше 8 символов.")
+        return 2
+    secure = env("COOKIE_SECURE", "0" if local else "1") == "1"
+
+    app = create_app(args.catalog, args.orders_dir, model=args.model, effort=args.effort,
+                     password=password, secure_cookies=secure)
     print(f"Откройте в браузере: http://{args.host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True, forwarded_allow_ips="*")
     return 0
 
 
