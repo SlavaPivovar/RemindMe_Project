@@ -88,6 +88,28 @@ dialog td button{padding:3px 8px;font-size:12px}
 .cat-row td{background:var(--bot);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)}
 .sub{color:var(--muted);font-size:12px}
 .show-m{display:none}
+.seg{display:flex;gap:4px;padding:10px 0 2px}
+.seg button{flex:1}
+.seg button.on{background:var(--text);color:var(--bg);border-color:var(--text)}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;padding:10px 0;align-items:center}
+.toolbar input,.toolbar select{font:inherit;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.toolbar input{flex:1;min-width:150px}
+.acts{white-space:nowrap}
+.form{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px 12px;align-items:start;padding:12px 0}
+.form label{color:var(--muted);padding-top:8px}
+.form input[type=text],.form input:not([type]),.form select{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.form input:disabled{opacity:.6}
+.checks{display:flex;flex-wrap:wrap;gap:6px 14px;padding-top:7px}
+.checks label{color:var(--text);padding:0;display:flex;gap:5px;align-items:center}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--bot);border-radius:999px;padding:3px 4px 3px 10px;font-size:13px}
+.chip button{border:0;background:none;padding:0 6px;color:var(--muted)}
+.row{display:flex;gap:6px}.row select{flex:1;min-width:0}
+.form-actions{display:flex;flex-wrap:wrap;gap:8px;padding-top:6px}
+.form-actions .danger{margin-left:auto;color:var(--accent);border-color:var(--accent)}
+.form-err{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:8px 12px;margin-top:10px}
+.form-ok{color:var(--ok);padding:6px 0}
+.hint{color:var(--muted);font-size:12px;margin-top:4px}
 @media (max-width:900px){
   .tabs{display:flex}
   main{grid-template-columns:minmax(0,1fr);padding:8px 16px 16px}
@@ -97,6 +119,8 @@ dialog td button{padding:3px 8px;font-size:12px}
   #catalogList .hide-m{display:none}
   #catalogList .show-m{display:inline}
   #catalogList th,#catalogList td{padding:6px 4px}
+  .form{grid-template-columns:1fr;gap:4px}
+  .form label{padding-top:8px}
   header .label{display:none}
 }
 </style>
@@ -132,15 +156,15 @@ dialog td button{padding:3px 8px;font-size:12px}
 </main>
 
 <dialog id="catalogDlg">
-  <div class="dh"><h2>Довідник робіт</h2><button id="closeCatalog">✕</button></div>
+  <div class="dh"><h2>Довідник</h2><button id="closeCatalog">✕</button></div>
   <div class="db">
-    <div class="filters">
-      <input id="catQuery" type="search" placeholder="Пошук: колодки, кондиціонер, BRK-PAD-F…">
-      <select id="catCategory"><option value="">Усі розділи</option></select>
+    <div class="seg" id="catTabs">
+      <button data-view="ops" class="on">Роботи</button><button data-view="parts">Запчастини</button><button data-view="settings">Налаштування</button>
     </div>
     <div id="catalogList">Завантаження…</div>
   </div>
 </dialog>
+<datalist id="catCategories"></datalist>
 
 <dialog id="ordersDlg">
   <div class="dh"><h2>Збережені замовлення-наряди</h2><button id="closeDlg">✕</button></div>
@@ -340,40 +364,217 @@ $("#btnOrders").onclick = showOrders;
 $("#btnLogout").onclick = () => { location.href = "/logout"; };
 $("#closeDlg").onclick = () => $("#ordersDlg").close();
 
-let catalogData = null;
-function renderCatalog(){
-  const q = $("#catQuery").value.trim().toLowerCase(), cat = $("#catCategory").value, cur = esc(catalogData.currency);
-  const words = q.split(/\s+/).filter(Boolean);
-  const ops = catalogData.operations.filter(o => (!cat || o.category === cat) &&
+// ---------- Довідник: перегляд і редагування ----------
+let catalogData = null, catView = "ops", catQuery = "", catCategory = "", partQuery = "", catFlash = "";
+const fmtHours = h => String(h).replace(".", ",");
+
+function setCatalog(data){
+  catalogData = data;
+  $("#catCategories").innerHTML = data.categories.map(c => `<option value="${esc(c)}">`).join("");
+}
+
+function showCatalog(view){
+  catView = view || catView;
+  document.querySelectorAll("#catTabs button").forEach(b => b.classList.toggle("on", b.dataset.view === catView));
+  const flash = catFlash ? `<div class="form-ok">✓ ${esc(catFlash)}</div>` : "";
+  catFlash = "";
+  if (catView === "ops"){
+    $("#catalogList").innerHTML = `${flash}<div class="toolbar">
+        <input id="catQuery" type="search" placeholder="Пошук: колодки, кондиціонер, BRK-PAD-F…" value="${esc(catQuery)}">
+        <select id="catCategory"><option value="">Усі розділи</option>${catalogData.categories.map(c =>
+          `<option ${c === catCategory ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
+        <button class="primary" data-new-op>＋ Нова робота</button></div><div id="opsTable"></div>`;
+    $("#catQuery").oninput = e => { catQuery = e.target.value; renderOpsTable(); };
+    $("#catCategory").onchange = e => { catCategory = e.target.value; renderOpsTable(); };
+    renderOpsTable();
+  } else if (catView === "parts"){
+    $("#catalogList").innerHTML = `${flash}<div class="toolbar">
+        <input id="partQuery" type="search" placeholder="Пошук запчастини або артикулу" value="${esc(partQuery)}">
+        <button class="primary" data-new-part>＋ Нова запчастина</button></div><div id="partsTable"></div>`;
+    $("#partQuery").oninput = e => { partQuery = e.target.value; renderPartsTable(); };
+    renderPartsTable();
+  } else {
+    renderSettingsForm(flash);
+  }
+}
+
+function renderOpsTable(){
+  const cur = esc(catalogData.currency), words = catQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const ops = catalogData.operations.filter(o => (!catCategory || o.category === catCategory) &&
     words.every(w => `${o.code} ${o.name} ${o.category} ${o.parts.map(p => p.name).join(" ")}`.toLowerCase().includes(w)));
-  if (!ops.length){ $("#catalogList").innerHTML = `<div class="empty">Нічого не знайдено.</div>`; return; }
+  if (!ops.length){ $("#opsTable").innerHTML = `<div class="empty">Нічого не знайдено.</div>`; return; }
   let html = `<div class="tbl"><table><tr><th>Робота</th><th class="hide-m">Моделі</th><th class="r hide-m">Н/год</th><th class="r">Робота</th><th class="r">Запчастини</th><th></th></tr>`;
   let last = null;
-  for (const o of ops){
+  for (const o of [...ops].sort((a, b) => catalogData.categories.indexOf(a.category) - catalogData.categories.indexOf(b.category))){
     if (o.category !== last){ html += `<tr class="cat-row"><td colspan="6">${esc(o.category)}</td></tr>`; last = o.category; }
-    html += `<tr><td>${esc(o.name)}<div class="sub">${esc(o.code)}${o.interval ? " · " + esc(o.interval) : ""}${o.parts.length ? " · " + o.parts.map(p => esc(p.name)).join(", ") : ""}<span class="show-m"> · ${esc(o.models)} · ${String(o.hours).replace(".", ",")} н/год</span></div></td>
-      <td class="hide-m">${esc(o.models)}</td><td class="r hide-m">${String(o.hours).replace(".", ",")}</td>
+    html += `<tr><td>${esc(o.name)}<div class="sub">${esc(o.code)}${o.interval ? " · " + esc(o.interval) : ""}${o.parts.length ? " · " + o.parts.map(p => esc(p.name)).join(", ") : ""}<span class="show-m"> · ${esc(o.models)} · ${fmtHours(o.hours)} н/год</span></div></td>
+      <td class="hide-m">${esc(o.models)}</td><td class="r hide-m">${fmtHours(o.hours)}</td>
       <td class="r">${num(o.labor_price)} ${cur}</td><td class="r">${o.parts.length ? num(o.parts_price) + " " + cur : "—"}</td>
-      <td class="r"><button data-add="${esc(o.code)}" title="Додати до замовлення-наряду">＋</button></td></tr>`;
+      <td class="r acts"><button data-edit-op="${esc(o.code)}" title="Редагувати">✎</button> <button data-add="${esc(o.code)}" title="Додати до замовлення-наряду">＋</button></td></tr>`;
   }
-  $("#catalogList").innerHTML = html + "</table></div>";
+  $("#opsTable").innerHTML = html + "</table></div>";
 }
+
+function renderPartsTable(){
+  const cur = esc(catalogData.currency), q = partQuery.trim().toLowerCase();
+  const parts = catalogData.parts.filter(p => !q || `${p.part_no} ${p.name}`.toLowerCase().includes(q));
+  $("#partsTable").innerHTML = parts.length ? `<div class="tbl"><table>
+    <tr><th>Запчастина</th><th class="r">Ціна</th><th class="hide-m">Од.</th><th class="r hide-m">У роботах</th><th></th></tr>
+    ${parts.map(p => `<tr><td>${esc(p.name)}<div class="sub">${esc(p.part_no)}<span class="show-m"> · ${esc(p.unit)}</span></div></td>
+      <td class="r">${num(p.price)} ${cur}</td><td class="hide-m">${esc(p.unit)}</td><td class="r hide-m">${p.used || "—"}</td>
+      <td class="r"><button data-edit-part="${esc(p.part_no)}" title="Редагувати">✎</button></td></tr>`).join("")}
+    </table></div>` : `<div class="empty">Нічого не знайдено.</div>`;
+}
+
+function formError(msg){
+  const box = $("#formErr");
+  box.hidden = !msg; box.textContent = msg || "";
+  if (msg) box.scrollIntoView({block: "nearest"});
+}
+
+async function saveCatalog(method, url, body, flash, view){
+  try{
+    setCatalog(await api(url, {method, body: body ? JSON.stringify(body) : undefined}));
+    catFlash = flash;
+    showCatalog(view);
+    return true;
+  }catch(e){ formError(e.message); return false; }
+}
+
+function opForm(code){
+  const o = code ? catalogData.operations.find(x => x.code === code) : null;
+  const models = o ? o.model_codes : ["*"];
+  let parts = o ? o.parts.map(p => p.part_no) : [];
+  const partName = no => (catalogData.parts.find(p => p.part_no === no) || {name: no}).name;
+  $("#catalogList").innerHTML = `<h3>${o ? "Редагування роботи" : "Нова робота"}</h3>
+    <form class="form" id="opForm" autocomplete="off">
+      <label for="fCode">Код</label>
+      <div><input id="fCode" value="${esc(o ? o.code : "")}" ${o ? "disabled" : ""} placeholder="напр. BRK-PAD-F">
+        ${o ? "" : `<div class="hint">Латинські літери, цифри, дефіс. Потім змінити не можна.</div>`}</div>
+      <label for="fName">Назва</label><input id="fName" value="${esc(o ? o.name : "")}">
+      <label for="fCat">Розділ</label><input id="fCat" list="catCategories" value="${esc(o ? o.category : catCategory)}" placeholder="оберіть або введіть новий">
+      <label for="fHours">Нормогодини</label><input id="fHours" inputmode="decimal" value="${o ? fmtHours(o.hours) : ""}" placeholder="напр. 1,5">
+      <label>Моделі</label>
+      <div class="checks" id="fModels">
+        <label><input type="checkbox" value="*" ${models.includes("*") ? "checked" : ""}> усі</label>
+        ${catalogData.models.map(m => `<label><input type="checkbox" value="${m.code}" ${models.includes(m.code) ? "checked" : ""}> ${esc(m.name)}</label>`).join("")}
+      </div>
+      <label>Запчастини</label>
+      <div><div class="chips" id="fParts"></div>
+        <div class="row"><select id="fPartSel"><option value="">— додати запчастину —</option>
+          ${catalogData.parts.map(p => `<option value="${esc(p.part_no)}">${esc(p.name)} (${esc(p.part_no)})</option>`).join("")}</select></div></div>
+      <label for="fInterval">Інтервал ТО</label><input id="fInterval" value="${esc(o ? o.interval : "")}" placeholder="напр. кожні 2 роки (необов'язково)">
+      <span></span>
+      <div><div class="form-err" id="formErr" hidden></div>
+        <div class="form-actions"><button class="primary" type="submit">Зберегти</button><button type="button" data-cancel>Скасувати</button>
+        ${o ? `<button type="button" class="danger" data-delete>Видалити</button>` : ""}</div></div>
+    </form>`;
+  const drawParts = () => $("#fParts").innerHTML = parts.length
+    ? parts.map(no => `<span class="chip">${esc(partName(no))}<button type="button" data-rm="${esc(no)}" title="Прибрати">✕</button></span>`).join("")
+    : `<span class="sub">без запчастин</span>`;
+  drawParts();
+  const syncModels = () => {
+    const all = $('#fModels input[value="*"]').checked;
+    document.querySelectorAll('#fModels input:not([value="*"])').forEach(c => c.disabled = all);
+  };
+  syncModels();
+  $("#fModels").onchange = syncModels;
+  $("#fPartSel").onchange = e => { const v = e.target.value; if (v && !parts.includes(v)) parts.push(v); e.target.value = ""; drawParts(); };
+  $("#fParts").onclick = e => { const no = e.target.dataset.rm; if (no){ parts = parts.filter(x => x !== no); drawParts(); } };
+  $("#opForm").onsubmit = e => {
+    e.preventDefault();
+    const all = $('#fModels input[value="*"]').checked;
+    const body = {
+      code: $("#fCode").value, name: $("#fName").value, category: $("#fCat").value, hours: $("#fHours").value,
+      models: all ? ["*"] : [...document.querySelectorAll('#fModels input:checked')].map(c => c.value),
+      parts, interval: $("#fInterval").value,
+    };
+    if (o) saveCatalog("PUT", `/api/catalog/operations/${encodeURIComponent(o.code)}`, body, `Роботу «${body.name}» збережено`, "ops");
+    else saveCatalog("POST", "/api/catalog/operations", body, `Роботу «${body.name}» додано`, "ops");
+  };
+  $("#opForm [data-cancel]").onclick = () => showCatalog("ops");
+  if (o) $("#opForm [data-delete]").onclick = () => {
+    if (confirm(`Видалити роботу «${o.name}» з довідника?`))
+      saveCatalog("DELETE", `/api/catalog/operations/${encodeURIComponent(o.code)}`, null, `Роботу «${o.name}» видалено`, "ops");
+  };
+  $("#fName").focus();
+}
+
+function partForm(no){
+  const p = no ? catalogData.parts.find(x => x.part_no === no) : null;
+  $("#catalogList").innerHTML = `<h3>${p ? "Редагування запчастини" : "Нова запчастина"}</h3>
+    <form class="form" id="partForm" autocomplete="off">
+      <label for="pNo">Артикул</label>
+      <div><input id="pNo" value="${esc(p ? p.part_no : "")}" ${p ? "disabled" : ""} placeholder="напр. PAD-F або 1044686-00-A">
+        ${p ? "" : `<div class="hint">Латинські літери, цифри, дефіс. Потім змінити не можна.</div>`}</div>
+      <label for="pName">Назва</label><input id="pName" value="${esc(p ? p.name : "")}">
+      <label for="pPrice">Ціна, ${esc(catalogData.currency)}</label><input id="pPrice" inputmode="decimal" value="${p ? String(p.price).replace(".", ",") : ""}">
+      <label for="pUnit">Одиниця</label><input id="pUnit" value="${esc(p ? p.unit : "шт")}">
+      ${p && p.used ? `<span></span><div class="hint">Використовується в ${p.used} роб. — нова ціна застосується до нових замовлень-нарядів.</div>` : ""}
+      <span></span>
+      <div><div class="form-err" id="formErr" hidden></div>
+        <div class="form-actions"><button class="primary" type="submit">Зберегти</button><button type="button" data-cancel>Скасувати</button>
+        ${p ? `<button type="button" class="danger" data-delete>Видалити</button>` : ""}</div></div>
+    </form>`;
+  $("#partForm").onsubmit = e => {
+    e.preventDefault();
+    const body = {part_no: $("#pNo").value, name: $("#pName").value, price: $("#pPrice").value, unit: $("#pUnit").value};
+    if (p) saveCatalog("PUT", `/api/catalog/parts/${encodeURIComponent(p.part_no)}`, body, `Запчастину «${body.name}» збережено`, "parts");
+    else saveCatalog("POST", "/api/catalog/parts", body, `Запчастину «${body.name}» додано`, "parts");
+  };
+  $("#partForm [data-cancel]").onclick = () => showCatalog("parts");
+  if (p) $("#partForm [data-delete]").onclick = () => {
+    if (confirm(`Видалити запчастину «${p.name}» з довідника?`))
+      saveCatalog("DELETE", `/api/catalog/parts/${encodeURIComponent(p.part_no)}`, null, `Запчастину «${p.name}» видалено`, "parts");
+  };
+  $("#pName").focus();
+}
+
+function renderSettingsForm(flash){
+  const s = catalogData.settings;
+  $("#catalogList").innerHTML = `${flash}
+    <form class="form" id="setForm" autocomplete="off">
+      <label for="sName">Назва сервісу</label><input id="sName" value="${esc(s.name)}">
+      <label for="sAddr">Адреса</label><input id="sAddr" value="${esc(s.address)}">
+      <label for="sPhone">Телефон</label><input id="sPhone" value="${esc(s.phone)}" placeholder="не друкується, якщо порожньо">
+      <label for="sInn">ЄДРПОУ</label><input id="sInn" value="${esc(s.inn)}" placeholder="не друкується, якщо порожньо">
+      <label for="sRate">Ставка нормогодини, ${esc(catalogData.currency)}</label><input id="sRate" inputmode="decimal" value="${String(s.labor_rate_per_hour).replace(".", ",")}">
+      <label for="sVat">ПДВ, %</label>
+      <div><input id="sVat" inputmode="decimal" value="${String(s.vat_percent).replace(".", ",")}">
+        <div class="checks"><label><input type="checkbox" id="sVatIn" ${s.prices_include_vat ? "checked" : ""}> ціни вже містять ПДВ</label></div>
+        <div class="hint">0 — ПДВ не нараховується і не показується.</div></div>
+      <span></span><div class="hint">Зміни застосовуються до нових замовлень-нарядів; уже створені не змінюються.</div>
+      <span></span>
+      <div><div class="form-err" id="formErr" hidden></div>
+        <div class="form-actions"><button class="primary" type="submit">Зберегти</button></div></div>
+    </form>`;
+  $("#setForm").onsubmit = async e => {
+    e.preventDefault();
+    const body = {name: $("#sName").value, address: $("#sAddr").value, phone: $("#sPhone").value, inn: $("#sInn").value,
+                  labor_rate_per_hour: $("#sRate").value, vat_percent: $("#sVat").value, prices_include_vat: $("#sVatIn").checked};
+    if (await saveCatalog("PUT", "/api/catalog/settings", body, "Налаштування збережено", "settings")){
+      $("#brand").textContent = catalogData.settings.name; document.title = catalogData.settings.name;
+    }
+  };
+}
+
 $("#btnCatalog").onclick = async () => {
   $("#catalogDlg").showModal();
-  if (catalogData) return renderCatalog();
   try{
-    catalogData = await api("/api/catalog");
-    $("#catCategory").innerHTML += catalogData.categories.map(c => `<option>${esc(c)}</option>`).join("");
-    renderCatalog();
+    setCatalog(await api("/api/catalog"));  // щоразу свіжі дані: довідник могли змінити інші
+    showCatalog("ops");
   }catch(e){ $("#catalogList").textContent = e.message; }
 };
-$("#catQuery").oninput = () => catalogData && renderCatalog();
-$("#catCategory").onchange = () => catalogData && renderCatalog();
+$("#catTabs").onclick = e => { const v = e.target.dataset.view; if (v && catalogData) showCatalog(v); };
 $("#closeCatalog").onclick = () => $("#catalogDlg").close();
 $("#catalogList").addEventListener("click", e => {
-  const code = e.target.dataset.add;
-  if (!code) return;
-  const op = catalogData.operations.find(o => o.code === code);
+  const d = e.target.dataset;
+  if (d.newOp !== undefined) return opForm(null);
+  if (d.editOp) return opForm(d.editOp);
+  if (d.newPart !== undefined) return partForm(null);
+  if (d.editPart) return partForm(d.editPart);
+  if (!d.add) return;
+  const op = catalogData.operations.find(o => o.code === d.add);
   $("#catalogDlg").close();
   document.querySelector('.tabs button[data-tab="chat"]').click();
   send(`Додай роботу ${op.code} — ${op.name}`);

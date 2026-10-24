@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import hmac
 import html
+import json
 import os
 import secrets
 import threading
@@ -19,7 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from pydantic import BaseModel
 
 from .assistant import MODEL, RepairOrderAssistant
-from .catalog import DEFAULT_CATALOG, Catalog
+from .catalog import DEFAULT_CATALOG, MODEL_CODES, Catalog, CatalogError
 from .order import OrderStore
 from .render import render_html
 from .tools import OrderSession
@@ -47,7 +48,7 @@ class ChatIn(BaseModel):
 
 
 def create_app(
-    catalog_path: str | Path = DEFAULT_CATALOG,
+    catalog_path: str | Path | None = None,
     orders_dir: str | Path = "orders",
     client: anthropic.Anthropic | None = None,
     model: str = MODEL,
@@ -55,8 +56,13 @@ def create_app(
     password: str | None = None,
     secure_cookies: bool = False,
 ) -> FastAPI:
-    """password — пароль для входу; без нього вхід не потрібен (лише для локального запуску)."""
-    catalog = Catalog.load(catalog_path)
+    """password — пароль для входу; без нього вхід не потрібен (лише для локального запуску).
+    catalog_path — файл довідника, який редагується з інтерфейсу; за його відсутності створюється
+    копія стандартного. Без catalog_path зміни довідника живуть лише в пам'яті."""
+    if catalog_path:
+        catalog = Catalog.load_editable(catalog_path)
+    else:
+        catalog = Catalog(json.loads(DEFAULT_CATALOG.read_text(encoding="utf-8")))
     store = OrderStore(orders_dir)
     client = client or anthropic.Anthropic()
     conversations: dict[str, Conversation] = {}
@@ -90,7 +96,7 @@ def create_app(
     @app.get("/login", response_class=HTMLResponse)
     def login_page(error: str = ""):
         page = (STATIC / "login.html").read_text(encoding="utf-8")
-        page = page.replace("<!--NAME-->", html.escape(service_name))
+        page = page.replace("<!--NAME-->", html.escape(catalog.service.get("name") or service_name))
         return page.replace("<!--ERROR-->", '<p class="err">Невірний пароль</p>' if error else "")
 
     @app.post("/login")
@@ -190,23 +196,76 @@ def create_app(
             conv.session, conv.assistant = fresh.session, fresh.assistant
         return {"order": None}
 
+    model_names = {"MODEL_S": "Model S", "MODEL_3": "Model 3", "MODEL_X": "Model X", "MODEL_Y": "Model Y",
+                   "CYBERTRUCK": "Cybertruck"}
+
     @app.get("/api/catalog")
     def catalog_view():
-        names = {"MODEL_S": "Model S", "MODEL_3": "Model 3", "MODEL_X": "Model X", "MODEL_Y": "Model Y",
-                 "CYBERTRUCK": "Cybertruck"}
+        operations, parts = catalog.operations, catalog.parts  # знімок на випадок паралельного редагування
         ops = []
-        for o in catalog.operations.values():
-            parts = [catalog.parts[p] for p in o.parts if p in catalog.parts]
+        for o in operations.values():
+            op_parts = [parts[p] for p in o.parts if p in parts]
             ops.append({
                 "code": o.code, "name": o.name, "category": o.category, "hours": o.hours,
-                "models": "усі" if "*" in o.models else ", ".join(names.get(m, m) for m in o.models),
+                "model_codes": o.models,
+                "models": "усі" if "*" in o.models else ", ".join(model_names.get(m, m) for m in o.models),
                 "labor_price": round(o.hours * catalog.labor_rate, 2),
-                "parts": [{"part_no": p.part_no, "name": p.name, "price": p.price} for p in parts],
-                "parts_price": round(sum(p.price for p in parts), 2),
+                "parts": [{"part_no": p.part_no, "name": p.name, "price": p.price} for p in op_parts],
+                "parts_price": round(sum(p.price for p in op_parts), 2),
                 "interval": o.interval,
             })
-        return {"categories": catalog.categories(), "operations": ops, "currency": catalog.currency,
-                "labor_rate": catalog.labor_rate}
+        used = {}
+        for o in operations.values():
+            for p in o.parts:
+                used[p] = used.get(p, 0) + 1
+        return {
+            "categories": catalog.categories(), "operations": ops, "currency": catalog.currency,
+            "labor_rate": catalog.labor_rate,
+            "parts": [{"part_no": p.part_no, "name": p.name, "price": p.price, "unit": p.unit,
+                       "used": used.get(p.part_no, 0)} for p in parts.values()],
+            "models": [{"code": m, "name": model_names[m]} for m in MODEL_CODES],
+            "settings": {**catalog.service, "labor_rate_per_hour": catalog.labor_rate,
+                         "vat_percent": catalog.vat_percent, "prices_include_vat": catalog.prices_include_vat},
+        }
+
+    def edit(action, *args):
+        try:
+            action(*args)
+        except CatalogError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except KeyError:
+            raise HTTPException(404, "Запис не знайдено (можливо, його вже видалили)") from None
+        except OSError:
+            raise HTTPException(500, "Не вдалося зберегти довідник на диск") from None
+        return catalog_view()
+
+    @app.post("/api/catalog/operations")
+    def create_operation(body: dict):
+        return edit(catalog.save_operation, body, True)
+
+    @app.put("/api/catalog/operations/{code}")
+    def update_operation(code: str, body: dict):
+        return edit(catalog.save_operation, {**body, "code": code}, False)
+
+    @app.delete("/api/catalog/operations/{code}")
+    def delete_operation(code: str):
+        return edit(catalog.delete_operation, code)
+
+    @app.post("/api/catalog/parts")
+    def create_part(body: dict):
+        return edit(catalog.save_part, body, True)
+
+    @app.put("/api/catalog/parts/{part_no}")
+    def update_part(part_no: str, body: dict):
+        return edit(catalog.save_part, {**body, "part_no": part_no}, False)
+
+    @app.delete("/api/catalog/parts/{part_no}")
+    def delete_part(part_no: str):
+        return edit(catalog.delete_part, part_no)
+
+    @app.put("/api/catalog/settings")
+    def update_settings(body: dict):
+        return edit(catalog.update_settings, body)
 
     @app.get("/api/orders")
     def orders():
@@ -265,8 +324,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Веб-інтерфейс помічника із замовлень-нарядів Tesla")
     parser.add_argument("--host", default=env("HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(env("PORT", "8000")))
-    parser.add_argument("--catalog", default=env("CATALOG", str(DEFAULT_CATALOG)))
     parser.add_argument("--orders-dir", default=env("ORDERS_DIR", "orders"))
+    parser.add_argument("--catalog", default=env("CATALOG"),
+                        help="файл довідника, який редагується з інтерфейсу (за замовчуванням catalog.json "
+                             "поруч із каталогом замовлень)")
     parser.add_argument("--model", default=env("MODEL", MODEL))
     parser.add_argument("--effort", default=env("EFFORT", "medium"), choices=["low", "medium", "high", "xhigh", "max"])
     args = parser.parse_args(argv)
@@ -281,7 +342,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     secure = env("COOKIE_SECURE", "0" if local else "1") == "1"
 
-    app = create_app(args.catalog, args.orders_dir, model=args.model, effort=args.effort,
+    catalog_path = args.catalog or Path(args.orders_dir).resolve().parent / "catalog.json"
+    app = create_app(catalog_path, args.orders_dir, model=args.model, effort=args.effort,
                      password=password, secure_cookies=secure)
     print(f"Відкрийте в браузері: http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True, forwarded_allow_ips="*")
