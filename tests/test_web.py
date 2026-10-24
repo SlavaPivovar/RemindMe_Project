@@ -1,4 +1,4 @@
-"""Тесты веб-интерфейса с подменённым API Anthropic."""
+"""Тести веб-інтерфейсу з підміненим API Anthropic."""
 
 import json
 
@@ -27,13 +27,13 @@ SCRIPT = [
         _tool("new_order", {}, 1),
     ], "tool_use"),
     _msg([
-        _tool("set_customer", {"name": "Иванов Иван", "phone": "+79000000000"}, 2),
+        _tool("set_customer", {"name": "Іваненко Іван", "phone": "+380670000000"}, 2),
         _tool("set_vehicle", {"vin": "5YJ3E1EA9LF000316", "odometer_km": 48000}, 3),
-        _tool("add_complaint", {"text": "Скрип при торможении"}, 4),
+        _tool("add_complaint", {"text": "Скрип під час гальмування"}, 4),
         _tool("add_operation", {"code": "BRK-PAD-F"}, 5),
     ], "tool_use"),
     _msg([_tool("save_order", {}, 6)], "tool_use"),
-    _msg([{"type": "text", "text": "Заказ-наряд **сохранён**."}], "end_turn"),
+    _msg([{"type": "text", "text": "Замовлення-наряд **збережено**."}], "end_turn"),
 ]
 
 
@@ -56,22 +56,22 @@ def test_full_flow(tmp_path):
     assert state["order"] is None and state["history"] == []
     assert "tesla_ro_sid" in web.cookies
 
-    r = web.post("/api/chat", json={"text": "Иванов, VIN 5YJ3E1EA9LF000316, скрип"}).json()
-    assert r["reply"] == "Заказ-наряд **сохранён**."
+    r = web.post("/api/chat", json={"text": "Іваненко, VIN 5YJ3E1EA9LF000316, скрип"}).json()
+    assert r["reply"] == "Замовлення-наряд **збережено**."
     order = r["order"]
     assert order["vehicle"]["model"] == "Model 3"
-    assert order["status"] == "открыт" and order["missing_fields"] == []
-    assert order["totals"]["total"] == "22300.00"
+    assert order["status"] == "відкрито" and order["missing_fields"] == []
+    assert order["totals"]["total"] == "222.00"
 
-    # история и заказ восстанавливаются после перезагрузки страницы
+    # історія та замовлення відновлюються після перезавантаження сторінки
     state = web.get("/api/state").json()
     assert [m["role"] for m in state["history"]] == ["user", "assistant"]
     assert state["order"]["number"] == order["number"]
 
-    assert "ЗАКАЗ-НАРЯД" in web.get("/print/current").text
+    assert "ЗАМОВЛЕННЯ-НАРЯД" in web.get("/print/current").text
     saved = web.get("/api/orders").json()
     assert [o["number"] for o in saved] == [order["number"]]
-    assert "Иванов Иван" in web.get(f"/print/{order['number']}").text
+    assert "Іваненко Іван" in web.get(f"/print/{order['number']}").text
 
     assert web.post("/api/reset").json() == {"order": None}
     assert web.get("/api/state").json()["order"] is None
@@ -83,7 +83,7 @@ def test_sessions_are_isolated(tmp_path):
     client, _ = make_client(SCRIPT)
     app = create_app(orders_dir=tmp_path, client=client)
     a, b = TestClient(app), TestClient(app)
-    a.post("/api/chat", json={"text": "заказ"})
+    a.post("/api/chat", json={"text": "замовлення"})
     assert a.get("/api/state").json()["order"] is not None
     assert b.get("/api/state").json()["order"] is None
 
@@ -95,7 +95,7 @@ def test_errors(tmp_path):
     client = anthropic.Anthropic(api_key="bad", max_retries=0,
                                  http_client=DefaultHttpxClient(transport=httpx2.MockTransport(handler)))
     web = TestClient(create_app(orders_dir=tmp_path, client=client))
-    r = web.post("/api/chat", json={"text": "привет"})
+    r = web.post("/api/chat", json={"text": "привіт"})
     assert r.status_code == 503 and "ключ" in r.json()["error"]
     assert web.post("/api/chat", json={"text": "  "}).status_code == 400
     assert web.get("/print/current").status_code == 404
@@ -106,7 +106,7 @@ def test_errors(tmp_path):
 def test_index_served(tmp_path):
     client, _ = make_client([])
     r = TestClient(create_app(orders_dir=tmp_path, client=client)).get("/")
-    assert r.status_code == 200 and "Заказ-наряды Tesla" in r.text
+    assert r.status_code == 200 and "Замовлення-наряди Tesla" in r.text
 
 
 def test_password_required(tmp_path, monkeypatch):
@@ -119,17 +119,17 @@ def test_password_required(tmp_path, monkeypatch):
     r = web.get("/", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/login"
     assert web.get("/print/ЗН-2026-00001", follow_redirects=False).status_code == 303
-    assert "Введите пароль" in web.get("/login").text
+    assert "Введіть пароль" in web.get("/login").text
 
     r = web.post("/login", data={"password": "wrong"}, follow_redirects=False)
     assert r.headers["location"] == "/login?error=1"
-    assert "Неверный пароль" in web.get("/login?error=1").text
+    assert "Невірний пароль" in web.get("/login?error=1").text
     assert web.get("/api/state").status_code == 401
 
     web.post("/login", data={"password": "secret-pass"})
     state = web.get("/api/state").json()
     assert state["auth"] is True
-    assert web.post("/api/chat", json={"text": "заказ"}).status_code == 200
+    assert web.post("/api/chat", json={"text": "замовлення"}).status_code == 200
 
     web.get("/logout")
     assert web.get("/api/state").status_code == 401

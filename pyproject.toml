@@ -1,7 +1,7 @@
 [project]
 name = "tesla-repair-orders"
 version = "0.1.0"
-description = "AI-помощник для оформления заказ-нарядов на ремонт автомобилей Tesla"
+description = "AI-помічник для оформлення замовлень-нарядів на ремонт автомобілів Tesla"
 requires-python = ">=3.10"
 dependencies = ["anthropic>=2.3.0", "fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
 

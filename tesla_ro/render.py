@@ -1,4 +1,4 @@
-"""Печатная форма заказ-наряда (HTML)."""
+"""Друкована форма замовлення-наряду (HTML)."""
 
 from __future__ import annotations
 
@@ -35,12 +35,12 @@ def render_html(order: RepairOrder, service: dict | None = None) -> str:
     complaints = "".join(f"<li>{e(x)}</li>" for x in order.complaints) or "<li>—</li>"
     recs = "".join(f"<li>{e(x)}</li>" for x in order.recommendations)
     vat_label = (
-        f"в т.ч. НДС {_num(order.vat_percent)}%" if order.prices_include_vat else f"НДС {_num(order.vat_percent)}%"
+        f"у т.ч. ПДВ {_num(order.vat_percent)}%" if order.prices_include_vat else f"ПДВ {_num(order.vat_percent)}%"
     )
 
     return f"""<!doctype html>
-<html lang="ru"><head><meta charset="utf-8">
-<title>Заказ-наряд {e(order.number)}</title>
+<html lang="uk"><head><meta charset="utf-8">
+<title>Замовлення-наряд {e(order.number)}</title>
 <style>
 body{{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#111;margin:24px;}}
 h1{{font-size:18px;margin:0 0 4px}} h2{{font-size:13px;margin:16px 0 6px;border-bottom:1px solid #999}}
@@ -51,41 +51,41 @@ th{{background:#eee;text-align:left}} .r{{text-align:right;white-space:nowrap}}
 .sign div{{flex:1;border-top:1px solid #000;padding-top:4px}}
 @media print{{body{{margin:0}}}}
 </style></head><body>
-<div class=head><div><h1>ЗАКАЗ-НАРЯД № {e(order.number)}</h1>
-<div>от {e(order.created_at)} · статус: {e(order.status)}</div></div>
+<div class=head><div><h1>ЗАМОВЛЕННЯ-НАРЯД № {e(order.number)}</h1>
+<div>від {e(order.created_at)} · статус: {e(order.status)}</div></div>
 <div style="text-align:right"><b>{e(service.get("name"))}</b><br>{e(service.get("address"))}<br>
-тел. {e(service.get("phone"))} · ИНН {e(service.get("inn"))}</div></div>
+тел. {e(service.get("phone"))} · ЄДРПОУ {e(service.get("inn"))}</div></div>
 
-<h2>Заказчик и автомобиль</h2>
+<h2>Замовник і автомобіль</h2>
 <table class=grid>
-<tr><td>Заказчик</td><td>{e(c.name)}</td><td>Автомобиль</td><td>Tesla {e(v.model)} {e(v.year)}</td></tr>
+<tr><td>Замовник</td><td>{e(c.name)}</td><td>Автомобіль</td><td>Tesla {e(v.model)} {e(v.year)}</td></tr>
 <tr><td>Телефон</td><td>{e(c.phone)}</td><td>VIN</td><td>{e(v.vin)}</td></tr>
-<tr><td>E-mail</td><td>{e(c.email)}</td><td>Гос. номер</td><td>{e(v.plate)}</td></tr>
-<tr><td>Цвет</td><td>{e(v.color)}</td><td>Пробег, км</td><td>{e(v.odometer_km)}</td></tr>
+<tr><td>E-mail</td><td>{e(c.email)}</td><td>Держ. номер</td><td>{e(v.plate)}</td></tr>
+<tr><td>Колір</td><td>{e(v.color)}</td><td>Пробіг, км</td><td>{e(v.odometer_km)}</td></tr>
 <tr><td></td><td></td><td>Заряд ВВБ, %</td><td>{e(v.battery_percent)}</td></tr>
 </table>
 
-<h2>Причина обращения (со слов заказчика)</h2><ul>{complaints}</ul>
-{f"<h2>Результаты диагностики</h2><p>{e(order.diagnosis)}</p>" if order.diagnosis else ""}
+<h2>Причина звернення (зі слів замовника)</h2><ul>{complaints}</ul>
+{f"<h2>Результати діагностики</h2><p>{e(order.diagnosis)}</p>" if order.diagnosis else ""}
 
-<h2>Работы</h2>
-<table><tr><th>№</th><th>Код</th><th>Наименование</th><th class=r>Н/ч</th><th class=r>Цена н/ч, {cur}</th><th class=r>Скидка, %</th><th class=r>Сумма, {cur}</th></tr>
+<h2>Роботи</h2>
+<table><tr><th>№</th><th>Код</th><th>Найменування</th><th class=r>Н/год</th><th class=r>Ціна н/год, {cur}</th><th class=r>Знижка, %</th><th class=r>Сума, {cur}</th></tr>
 {labor_rows}</table>
 
-<h2>Запасные части и материалы</h2>
-<table><tr><th>№</th><th>Артикул</th><th>Наименование</th><th class=r>Кол-во</th><th class=r>Цена, {cur}</th><th class=r>Скидка, %</th><th class=r>Сумма, {cur}</th></tr>
+<h2>Запасні частини та матеріали</h2>
+<table><tr><th>№</th><th>Артикул</th><th>Найменування</th><th class=r>Кількість</th><th class=r>Ціна, {cur}</th><th class=r>Знижка, %</th><th class=r>Сума, {cur}</th></tr>
 {part_rows}</table>
 
 <table class=tot style="width:auto;margin:12px 0 0 auto">
-<tr><td>Итого работы:</td><td class=r>{fmt(t["labor"])} {cur}</td></tr>
-<tr><td>Итого запчасти:</td><td class=r>{fmt(t["parts"])} {cur}</td></tr>
+<tr><td>Разом роботи:</td><td class=r>{fmt(t["labor"])} {cur}</td></tr>
+<tr><td>Разом запчастини:</td><td class=r>{fmt(t["parts"])} {cur}</td></tr>
 <tr><td>{vat_label}:</td><td class=r>{fmt(t["vat"])} {cur}</td></tr>
-<tr><td><b>ВСЕГО К ОПЛАТЕ:</b></td><td class=r><b>{fmt(t["total"])} {cur}</b></td></tr>
+<tr><td><b>УСЬОГО ДО СПЛАТИ:</b></td><td class=r><b>{fmt(t["total"])} {cur}</b></td></tr>
 </table>
-{f"<h2>Рекомендации</h2><ul>{recs}</ul>" if recs else ""}
+{f"<h2>Рекомендації</h2><ul>{recs}</ul>" if recs else ""}
 
-<p style="margin-top:16px;font-size:11px;color:#444">С объёмом и стоимостью работ ознакомлен и согласен.
-Работы с высоковольтной системой выполняются квалифицированным персоналом с соблюдением требований безопасности.</p>
-<div class=sign><div>Мастер-приёмщик</div><div>Заказчик</div></div>
+<p style="margin-top:16px;font-size:11px;color:#444">З обсягом і вартістю робіт ознайомлений і згоден.
+Роботи з високовольтною системою виконує кваліфікований персонал із дотриманням вимог безпеки.</p>
+<div class=sign><div>Майстер-приймальник</div><div>Замовник</div></div>
 </body></html>
 """

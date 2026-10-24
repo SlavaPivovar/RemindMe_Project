@@ -6,7 +6,7 @@ def test_decodes_model_3_fremont():
     assert info.valid
     assert info.model_name == "Model 3"
     assert info.year == 2020
-    assert "Фримонт" in info.plant
+    assert "Фрімонт" in info.plant
     assert info.warnings == []
 
 
@@ -25,7 +25,7 @@ def test_china_vin_skips_check_digit():
 def test_bad_check_digit_is_warning():
     info = decode_vin("5YJ3E1EA1LF000316")
     assert info.valid
-    assert any("Контрольная цифра" in w for w in info.warnings)
+    assert any("Контрольна цифра" in w for w in info.warnings)
 
 
 def test_invalid_length_and_chars():

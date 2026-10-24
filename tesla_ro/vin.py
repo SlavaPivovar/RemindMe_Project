@@ -1,16 +1,16 @@
-"""Декодер VIN автомобилей Tesla."""
+"""Декодер VIN автомобілів Tesla."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
 WMI = {
-    "5YJ": "Tesla, Inc. (США, легковые)",
+    "5YJ": "Tesla, Inc. (США, легкові)",
     "7SA": "Tesla, Inc. (США, MPV/SUV)",
     "7G2": "Tesla, Inc. (США, Cybertruck/Semi)",
     "LRW": "Tesla (Китай, Шанхай)",
-    "XP7": "Tesla (Германия, Берлин)",
-    "SFZ": "Tesla Roadster (Великобритания)",
+    "XP7": "Tesla (Німеччина, Берлін)",
+    "SFZ": "Tesla Roadster (Велика Британія)",
 }
 
 MODELS = {
@@ -24,15 +24,15 @@ MODELS = {
 }
 
 PLANTS = {
-    "F": "Фримонт, Калифорния (США)",
-    "A": "Остин, Техас (США)",
-    "P": "Пало-Альто, Калифорния (США)",
-    "N": "Рино, Невада (США)",
+    "F": "Фрімонт, Каліфорнія (США)",
+    "A": "Остін, Техас (США)",
+    "P": "Пало-Альто, Каліфорнія (США)",
+    "N": "Ріно, Невада (США)",
     "C": "Шанхай (Китай)",
-    "B": "Берлин (Германия)",
+    "B": "Берлін (Німеччина)",
 }
 
-# Код модельного года (10-я позиция), цикл 30 лет; для Tesla берём 2010–2039.
+# Код модельного року (10-та позиція), цикл 30 років; для Tesla беремо 2010–2039.
 _YEAR_CODES = "ABCDEFGHJKLMNPRSTVWXY123456789"
 YEARS = {c: 2010 + i for i, c in enumerate(_YEAR_CODES)}
 
@@ -69,34 +69,34 @@ def decode_vin(raw: str) -> VinInfo:
     vin = raw.strip().upper().replace(" ", "")
     info = VinInfo(vin=vin, valid=False)
     if len(vin) != 17:
-        info.warnings.append(f"VIN должен содержать 17 символов, получено {len(vin)}")
+        info.warnings.append(f"VIN має містити 17 символів, отримано {len(vin)}")
         return info
     bad = sorted({ch for ch in vin if ch not in _TRANSLIT})
     if bad:
-        info.warnings.append(f"Недопустимые символы в VIN: {', '.join(bad)} (буквы I, O, Q не используются)")
+        info.warnings.append(f"Неприпустимі символи у VIN: {', '.join(bad)} (літери I, O, Q не використовуються)")
         return info
 
     info.manufacturer = WMI.get(vin[:3])
     if info.manufacturer is None:
-        info.warnings.append(f"WMI «{vin[:3]}» не относится к Tesla")
+        info.warnings.append(f"WMI «{vin[:3]}» не належить Tesla")
     model = MODELS.get(vin[3])
     if model:
         info.model_code, info.model_name = model
     else:
-        info.warnings.append(f"Неизвестный код модели «{vin[3]}» (4-я позиция)")
+        info.warnings.append(f"Невідомий код моделі «{vin[3]}» (4-та позиція)")
     info.year = YEARS.get(vin[9])
     if info.year is None:
-        info.warnings.append(f"Неизвестный код модельного года «{vin[9]}»")
+        info.warnings.append(f"Невідомий код модельного року «{vin[9]}»")
     info.plant = PLANTS.get(vin[10])
     if info.plant is None:
-        info.warnings.append(f"Неизвестный код завода «{vin[10]}»")
+        info.warnings.append(f"Невідомий код заводу «{vin[10]}»")
     info.serial = vin[11:]
 
-    # Контрольная цифра обязательна для рынка Северной Америки; у китайских и
-    # европейских VIN на 9-й позиции может стоять другой символ.
+    # Контрольна цифра обов'язкова для ринку Північної Америки; у китайських і
+    # європейських VIN на 9-й позиції може стояти інший символ.
     if vin[:3] in ("5YJ", "7SA", "7G2") and check_digit(vin) != vin[8]:
         info.warnings.append(
-            f"Контрольная цифра не совпадает (ожидалась «{check_digit(vin)}», в VIN «{vin[8]}») — проверьте VIN"
+            f"Контрольна цифра не збігається (очікувалась «{check_digit(vin)}», у VIN «{vin[8]}») — перевірте VIN"
         )
 
     info.valid = info.manufacturer is not None and info.model_code is not None

@@ -1,4 +1,4 @@
-"""Справочник работ и запчастей."""
+"""Довідник робіт і запчастин."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class Part:
 class Catalog:
     def __init__(self, data: dict):
         self.service: dict = data.get("service", {})
-        self.currency: str = data.get("currency", "₽")
+        self.currency: str = data.get("currency", "$")
         self.vat_percent: float = data.get("vat_percent", 0)
         self.prices_include_vat: bool = data.get("prices_include_vat", True)
         self.labor_rate: float = data["labor_rate_per_hour"]

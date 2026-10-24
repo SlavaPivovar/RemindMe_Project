@@ -1,4 +1,4 @@
-"""Веб-интерфейс помощника: python -m tesla_ro.web"""
+"""Веб-інтерфейс помічника: python -m tesla_ro.web"""
 
 from __future__ import annotations
 
@@ -26,11 +26,11 @@ from .tools import OrderSession
 STATIC = Path(__file__).parent / "static"
 COOKIE = "tesla_ro_sid"
 AUTH_COOKIE = "tesla_ro_auth"
-AUTH_TTL = 30 * 24 * 3600  # вход действует 30 дней
-IDLE_TTL = 12 * 3600  # неактивные диалоги удаляются из памяти через 12 часов
+AUTH_TTL = 30 * 24 * 3600  # вхід діє 30 днів
+IDLE_TTL = 12 * 3600  # неактивні діалоги видаляються з пам'яті через 12 годин
 FAIL_WINDOW = 15 * 60
-MAX_FAILS = 10  # неверных паролей за 15 минут с одного адреса
-MAX_FAILS_TOTAL = 100  # и со всех адресов вместе (адрес за прокси можно подделать)
+MAX_FAILS = 10  # хибних паролів за 15 хвилин з однієї адреси
+MAX_FAILS_TOTAL = 100  # і з усіх адрес разом (адресу за проксі можна підробити)
 
 
 @dataclass
@@ -54,13 +54,13 @@ def create_app(
     password: str | None = None,
     secure_cookies: bool = False,
 ) -> FastAPI:
-    """password — пароль для входа; без него вход не требуется (только для локального запуска)."""
+    """password — пароль для входу; без нього вхід не потрібен (лише для локального запуску)."""
     catalog = Catalog.load(catalog_path)
     store = OrderStore(orders_dir)
     client = client or anthropic.Anthropic()
     conversations: dict[str, Conversation] = {}
     conversations_lock = threading.Lock()
-    app = FastAPI(title="Заказ-наряды Tesla", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Замовлення-наряди Tesla", docs_url=None, redoc_url=None, openapi_url=None)
     auth_key = hashlib.sha256(f"{secrets.token_hex(32)}:{password}".encode()).digest()
     failures: dict[str, list[float]] = {}
     failures_lock = threading.Lock()
@@ -82,13 +82,13 @@ def create_app(
         if request.url.path in ("/login", "/logout") or is_authorized(request.cookies.get(AUTH_COOKIE)):
             return await call_next(request)
         if request.url.path.startswith("/api/"):
-            return JSONResponse({"error": "Требуется вход"}, status_code=401)
+            return JSONResponse({"error": "Потрібно увійти"}, status_code=401)
         return RedirectResponse("/login", status_code=303)
 
     @app.get("/login", response_class=HTMLResponse)
     def login_page(error: str = ""):
         return (STATIC / "login.html").read_text(encoding="utf-8").replace(
-            "<!--ERROR-->", '<p class="err">Неверный пароль</p>' if error else ""
+            "<!--ERROR-->", '<p class="err">Невірний пароль</p>' if error else ""
         )
 
     @app.post("/login")
@@ -102,7 +102,7 @@ def create_app(
                     del failures[key]
             total = sum(len(v) for v in failures.values())
             if len(failures.get(ip, [])) >= MAX_FAILS or total >= MAX_FAILS_TOTAL:
-                return HTMLResponse("Слишком много попыток входа. Попробуйте через 15 минут.", status_code=429)
+                return HTMLResponse("Забагато спроб входу. Спробуйте за 15 хвилин.", status_code=429)
         if password is None or hmac.compare_digest(password_input.encode(), password.encode()):
             resp = RedirectResponse("/", status_code=303)
             resp.set_cookie(AUTH_COOKIE, sign(int(now) + AUTH_TTL), max_age=AUTH_TTL,
@@ -158,24 +158,24 @@ def create_app(
     def chat(body: ChatIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
         text = body.text.strip()
         if not text:
-            raise HTTPException(400, "Пустое сообщение")
+            raise HTTPException(400, "Порожнє повідомлення")
         conv = conversation(tesla_ro_sid, response)
         if not conv.lock.acquire(blocking=False):
-            raise HTTPException(409, "Помощник ещё отвечает на предыдущее сообщение")
+            raise HTTPException(409, "Помічник ще відповідає на попереднє повідомлення")
         try:
             reply = conv.assistant.send(text)
         except anthropic.AuthenticationError:
-            raise HTTPException(503, "Неверный ключ API Anthropic (ANTHROPIC_API_KEY)") from None
+            raise HTTPException(503, "Невірний ключ API Anthropic (ANTHROPIC_API_KEY)") from None
         except anthropic.RateLimitError:
-            raise HTTPException(429, "Превышен лимит запросов к API, попробуйте через минуту") from None
+            raise HTTPException(429, "Перевищено ліміт запитів до API, спробуйте за хвилину") from None
         except anthropic.APIStatusError as exc:
-            raise HTTPException(502, f"Ошибка API ({exc.status_code}): {exc.message}") from None
+            raise HTTPException(502, f"Помилка API ({exc.status_code}): {exc.message}") from None
         except anthropic.APIConnectionError:
-            raise HTTPException(502, "Нет соединения с API Anthropic") from None
+            raise HTTPException(502, "Немає з'єднання з API Anthropic") from None
         except TypeError as exc:
             if "authentication" not in str(exc):
                 raise
-            raise HTTPException(503, "Не задан ключ API: установите переменную окружения ANTHROPIC_API_KEY") from None
+            raise HTTPException(503, "Не задано ключ API: встановіть змінну оточення ANTHROPIC_API_KEY") from None
         finally:
             conv.lock.release()
         return {"reply": reply, "order": conv.session.snapshot()}
@@ -209,8 +209,8 @@ def create_app(
         try:
             order = store.load(number)
         except FileNotFoundError:
-            raise HTTPException(404, "Заказ-наряд не найден") from None
-        # Начинаем новый диалог, чтобы история не относилась к другому заказу.
+            raise HTTPException(404, "Замовлення-наряд не знайдено") from None
+        # Починаємо новий діалог, щоб історія не стосувалася іншого замовлення.
         with conversations_lock:
             fresh = new_conversation()
             conv.session, conv.assistant = fresh.session, fresh.assistant
@@ -221,7 +221,7 @@ def create_app(
     def print_current(response: Response, tesla_ro_sid: str | None = Cookie(None)):
         conv = conversation(tesla_ro_sid, response)
         if conv.session.order is None:
-            raise HTTPException(404, "Заказ-наряд ещё не создан")
+            raise HTTPException(404, "Замовлення-наряд ще не створено")
         return render_html(conv.session.order, catalog.service)
 
     @app.get("/print/{number}", response_class=HTMLResponse)
@@ -229,7 +229,7 @@ def create_app(
         try:
             return render_html(store.load(number), catalog.service)
         except FileNotFoundError:
-            raise HTTPException(404, "Заказ-наряд не найден") from None
+            raise HTTPException(404, "Замовлення-наряд не знайдено") from None
 
     @app.exception_handler(HTTPException)
     def http_error(_, exc: HTTPException):
@@ -242,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
     env = os.environ.get
-    parser = argparse.ArgumentParser(description="Веб-интерфейс помощника по заказ-нарядам Tesla")
+    parser = argparse.ArgumentParser(description="Веб-інтерфейс помічника із замовлень-нарядів Tesla")
     parser.add_argument("--host", default=env("HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(env("PORT", "8000")))
     parser.add_argument("--catalog", default=env("CATALOG", str(DEFAULT_CATALOG)))
@@ -254,16 +254,16 @@ def main(argv: list[str] | None = None) -> int:
     password = env("APP_PASSWORD") or None
     local = args.host in ("127.0.0.1", "localhost", "::1")
     if not local and not password:
-        print("Для доступа из сети задайте пароль: переменная окружения APP_PASSWORD.")
+        print("Для доступу з мережі задайте пароль: змінна оточення APP_PASSWORD.")
         return 2
     if password and len(password) < 8:
-        print("APP_PASSWORD слишком короткий: нужно не меньше 8 символов.")
+        print("APP_PASSWORD закороткий: потрібно щонайменше 8 символів.")
         return 2
     secure = env("COOKIE_SECURE", "0" if local else "1") == "1"
 
     app = create_app(args.catalog, args.orders_dir, model=args.model, effort=args.effort,
                      password=password, secure_cookies=secure)
-    print(f"Откройте в браузере: http://{args.host}:{args.port}")
+    print(f"Відкрийте в браузері: http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True, forwarded_allow_ips="*")
     return 0
 

@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ru">
+<html lang="uk">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Заказ-наряды Tesla</title>
+<title>Замовлення-наряди Tesla</title>
 <style>
 :root{
   --bg:#f4f5f7; --panel:#fff; --text:#16181d; --muted:#6b7280; --line:#e3e5e9;
@@ -90,44 +90,44 @@ dialog td button{padding:3px 8px;font-size:12px}
 </head>
 <body>
 <header>
-  <h1>Заказ-наряды Tesla <span id="svc"></span></h1>
-  <button id="btnOrders" title="Сохранённые заказ-наряды">📁 <span class="label">Сохранённые</span></button>
-  <button id="btnNew" title="Начать новый заказ-наряд">＋ <span class="label">Новый</span></button>
-  <button id="btnLogout" title="Выйти" hidden>⎋ <span class="label">Выйти</span></button>
+  <h1>Замовлення-наряди Tesla <span id="svc"></span></h1>
+  <button id="btnOrders" title="Збережені замовлення-наряди">📁 <span class="label">Збережені</span></button>
+  <button id="btnNew" title="Почати нове замовлення-наряд">＋ <span class="label">Нове</span></button>
+  <button id="btnLogout" title="Вийти" hidden>⎋ <span class="label">Вийти</span></button>
 </header>
-<div class="tabs"><button data-tab="chat" class="on">Чат</button><button data-tab="order">Заказ-наряд</button></div>
+<div class="tabs"><button data-tab="chat" class="on">Чат</button><button data-tab="order">Замовлення-наряд</button></div>
 <main>
   <section id="chat" class="card show">
     <div class="log" id="log"></div>
     <div class="hints" id="hints">
-      <button>Новый заказ: Иванов Иван, +7 900 000-00-00, VIN 5YJ3E1EA9LF000316, пробег 48 000 км</button>
-      <button>Скрипят тормоза спереди</button>
-      <button>Не работает кондиционер</button>
-      <button>Покажи итог</button>
-      <button>Сохрани заказ-наряд</button>
+      <button>Нове замовлення: Іваненко Іван, +380 67 000 00 00, VIN 5YJ3E1EA9LF000316, пробіг 48 000 км</button>
+      <button>Скриплять гальма спереду</button>
+      <button>Не працює кондиціонер</button>
+      <button>Покажи підсумок</button>
+      <button>Збережи замовлення-наряд</button>
     </div>
     <form class="composer" id="composer">
-      <textarea id="input" rows="2" placeholder="Клиент, автомобиль, жалобы… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
-      <button class="primary" id="send">Отправить</button>
+      <textarea id="input" rows="2" placeholder="Клієнт, автомобіль, скарги… (Enter — надіслати, Shift+Enter — новий рядок)"></textarea>
+      <button class="primary" id="send">Надіслати</button>
     </form>
   </section>
   <section id="order" class="card"><div class="body" id="orderBody"></div></section>
 </main>
 
 <dialog id="ordersDlg">
-  <div class="dh"><h2>Сохранённые заказ-наряды</h2><button id="closeDlg">✕</button></div>
+  <div class="dh"><h2>Збережені замовлення-наряди</h2><button id="closeDlg">✕</button></div>
   <div class="db" id="ordersList"></div>
 </dialog>
 
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const num = v => Number(v).toLocaleString("ru-RU", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const num = v => Number(v).toLocaleString("uk-UA", {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const dash = v => (v === null || v === undefined || v === "") ? "—" : esc(v);
 let busy = false;
 
 function md(text){
-  // Минимальная разметка: абзацы, списки, **жирный**, `код`.
+  // Мінімальна розмітка: абзаци, списки, **жирний**, `код`.
   const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
   let html = "", list = null;
   for (const raw of text.split("\n")){
@@ -151,12 +151,12 @@ function addMsg(role, text){
 }
 
 function greet(){
-  addMsg("assistant", "Здравствуйте! Опишите клиента, автомобиль (VIN, пробег) и жалобы — я подберу работы и запчасти и оформлю заказ-наряд.");
+  addMsg("assistant", "Вітаю! Опишіть клієнта, автомобіль (VIN, пробіг) і скарги — я підберу роботи та запчастини й оформлю замовлення-наряд.");
 }
 
 function renderOrder(o){
   const box = $("#orderBody");
-  if (!o){ box.innerHTML = `<div class="empty">Заказ-наряд появится здесь, как только вы начнёте диалог.</div>`; return; }
+  if (!o){ box.innerHTML = `<div class="empty">Замовлення-наряд з'явиться тут, щойно ви почнете діалог.</div>`; return; }
   const c = o.customer, v = o.vehicle, t = o.totals, cur = esc(o.currency);
   const lines = (rows, isLabor) => rows.length ? rows.map((l, i) => `<tr>
       <td>${i + 1}</td><td>${esc(isLabor ? l.code : l.part_no)}</td><td>${esc(l.name)}</td>
@@ -165,41 +165,41 @@ function renderOrder(o){
       <td class="r">${l.discount_percent ? esc(l.discount_percent) + "%" : ""}</td>
       <td class="r">${num((isLabor ? l.hours * l.rate : l.qty * l.price) * (1 - l.discount_percent / 100))}</td></tr>`).join("")
     : `<tr><td colspan="7" style="color:var(--muted)">—</td></tr>`;
-  const vat = o.prices_include_vat ? `в т.ч. НДС ${esc(o.vat_percent)}%` : `НДС ${esc(o.vat_percent)}%`;
+  const vat = o.prices_include_vat ? `у т.ч. ПДВ ${esc(o.vat_percent)}%` : `ПДВ ${esc(o.vat_percent)}%`;
   box.innerHTML = `
     <div class="ohead">
       <h2>№ ${esc(o.number)}</h2><span class="badge">${esc(o.status)}</span><span class="badge">${esc(o.created_at)}</span>
-      <div class="actions"><button id="btnPrint">🖨 Печать</button></div>
+      <div class="actions"><button id="btnPrint">🖨 Друк</button></div>
     </div>
-    ${o.missing_fields.length ? `<div class="missing">Не заполнено: ${o.missing_fields.map(esc).join(", ")}</div>` : `<div class="done">✓ Все обязательные поля заполнены</div>`}
+    ${o.missing_fields.length ? `<div class="missing">Не заповнено: ${o.missing_fields.map(esc).join(", ")}</div>` : `<div class="done">✓ Усі обов'язкові поля заповнено</div>`}
     <div class="info">
-      <dl><dt>Заказчик</dt><dd>${dash(c.name)}</dd><dt>Телефон</dt><dd>${dash(c.phone)}</dd><dt>E-mail</dt><dd>${dash(c.email)}</dd></dl>
-      <dl><dt>Автомобиль</dt><dd>${v.model ? "Tesla " + esc(v.model) + " " + dash(v.year) : "—"}</dd><dt>VIN</dt><dd>${dash(v.vin)}</dd>
-          <dt>Гос. номер</dt><dd>${dash(v.plate)}</dd><dt>Пробег</dt><dd>${v.odometer_km != null ? Number(v.odometer_km).toLocaleString("ru-RU") + " км" : "—"}</dd>
-          ${v.color ? `<dt>Цвет</dt><dd>${esc(v.color)}</dd>` : ""}${v.battery_percent != null ? `<dt>Заряд ВВБ</dt><dd>${esc(v.battery_percent)}%</dd>` : ""}</dl>
+      <dl><dt>Замовник</dt><dd>${dash(c.name)}</dd><dt>Телефон</dt><dd>${dash(c.phone)}</dd><dt>E-mail</dt><dd>${dash(c.email)}</dd></dl>
+      <dl><dt>Автомобіль</dt><dd>${v.model ? "Tesla " + esc(v.model) + " " + dash(v.year) : "—"}</dd><dt>VIN</dt><dd>${dash(v.vin)}</dd>
+          <dt>Держ. номер</dt><dd>${dash(v.plate)}</dd><dt>Пробіг</dt><dd>${v.odometer_km != null ? Number(v.odometer_km).toLocaleString("uk-UA") + " км" : "—"}</dd>
+          ${v.color ? `<dt>Колір</dt><dd>${esc(v.color)}</dd>` : ""}${v.battery_percent != null ? `<dt>Заряд ВВБ</dt><dd>${esc(v.battery_percent)}%</dd>` : ""}</dl>
     </div>
-    <h3>Жалобы клиента</h3>
+    <h3>Скарги клієнта</h3>
     ${o.complaints.length ? `<ul class="plain">${o.complaints.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : `<div style="color:var(--muted)">—</div>`}
-    ${o.diagnosis ? `<h3>Диагностика</h3><div>${esc(o.diagnosis)}</div>` : ""}
-    <h3>Работы</h3>
-    <div class="tbl"><table><tr><th>№</th><th>Код</th><th>Наименование</th><th class="r">Н/ч</th><th class="r">Цена н/ч</th><th class="r">Скидка</th><th class="r">Сумма</th></tr>${lines(o.labor, true)}</table></div>
-    <h3>Запчасти и материалы</h3>
-    <div class="tbl"><table><tr><th>№</th><th>Артикул</th><th>Наименование</th><th class="r">Кол-во</th><th class="r">Цена</th><th class="r">Скидка</th><th class="r">Сумма</th></tr>${lines(o.parts, false)}</table></div>
+    ${o.diagnosis ? `<h3>Діагностика</h3><div>${esc(o.diagnosis)}</div>` : ""}
+    <h3>Роботи</h3>
+    <div class="tbl"><table><tr><th>№</th><th>Код</th><th>Найменування</th><th class="r">Н/год</th><th class="r">Ціна н/год</th><th class="r">Знижка</th><th class="r">Сума</th></tr>${lines(o.labor, true)}</table></div>
+    <h3>Запчастини та матеріали</h3>
+    <div class="tbl"><table><tr><th>№</th><th>Артикул</th><th>Найменування</th><th class="r">Кількість</th><th class="r">Ціна</th><th class="r">Знижка</th><th class="r">Сума</th></tr>${lines(o.parts, false)}</table></div>
     <div class="totals">
-      <div><span>Работы</span><span>${num(t.labor)} ${cur}</span></div>
-      <div><span>Запчасти</span><span>${num(t.parts)} ${cur}</span></div>
+      <div><span>Роботи</span><span>${num(t.labor)} ${cur}</span></div>
+      <div><span>Запчастини</span><span>${num(t.parts)} ${cur}</span></div>
       <div><span>${vat}</span><span>${num(t.vat)} ${cur}</span></div>
-      <div class="grand"><span>Итого</span><span>${num(t.total)} ${cur}</span></div>
+      <div class="grand"><span>Разом</span><span>${num(t.total)} ${cur}</span></div>
     </div>
-    ${o.recommendations.length ? `<h3>Рекомендации</h3><ul class="plain">${o.recommendations.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}`;
+    ${o.recommendations.length ? `<h3>Рекомендації</h3><ul class="plain">${o.recommendations.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}`;
   $("#btnPrint").onclick = () => window.open("/print/current", "_blank");
 }
 
 async function api(path, opts = {}){
   const r = await fetch(path, {headers: {"Content-Type": "application/json"}, credentials: "same-origin", ...opts});
   const data = await r.json().catch(() => ({}));
-  if (r.status === 401){ location.href = "/login"; throw new Error("Требуется вход"); }
-  if (!r.ok) throw new Error(data.error || data.detail || `Ошибка ${r.status}`);
+  if (r.status === 401){ location.href = "/login"; throw new Error("Потрібно увійти"); }
+  if (!r.ok) throw new Error(data.error || data.detail || `Помилка ${r.status}`);
   return data;
 }
 
@@ -210,7 +210,7 @@ async function send(text){
   addMsg("user", text);
   $("#input").value = "";
   const typing = document.createElement("div");
-  typing.className = "typing"; typing.textContent = "Помощник работает";
+  typing.className = "typing"; typing.textContent = "Помічник працює";
   $("#log").appendChild(typing); $("#log").scrollTop = $("#log").scrollHeight;
   try{
     const data = await api("/api/chat", {method: "POST", body: JSON.stringify({text})});
@@ -226,16 +226,16 @@ async function send(text){
 }
 
 async function showOrders(){
-  $("#ordersList").innerHTML = "Загрузка…";
+  $("#ordersList").innerHTML = "Завантаження…";
   $("#ordersDlg").showModal();
   try{
     const list = await api("/api/orders");
     $("#ordersList").innerHTML = list.length ? `<div class="tbl"><table>
-      <tr><th>Номер</th><th>Дата</th><th>Клиент</th><th>Автомобиль</th><th class="r">Сумма</th><th>Статус</th><th></th></tr>
+      <tr><th>Номер</th><th>Дата</th><th>Клієнт</th><th>Автомобіль</th><th class="r">Сума</th><th>Статус</th><th></th></tr>
       ${list.map(o => `<tr><td>${esc(o.number)}</td><td>${esc(o.created_at)}</td><td>${dash(o.customer)}</td><td>${dash(o.vehicle)}</td>
         <td class="r">${num(o.total)} ${esc(o.currency)}</td><td>${esc(o.status)}</td>
-        <td class="r"><button data-open="${esc(o.number)}">Открыть</button> <button data-print="${esc(o.number)}">🖨</button></td></tr>`).join("")}
-      </table></div>` : `<div class="empty">Сохранённых заказ-нарядов пока нет.</div>`;
+        <td class="r"><button data-open="${esc(o.number)}">Відкрити</button> <button data-print="${esc(o.number)}">🖨</button></td></tr>`).join("")}
+      </table></div>` : `<div class="empty">Збережених замовлень-нарядів поки немає.</div>`;
   }catch(e){ $("#ordersList").textContent = e.message; }
 }
 
@@ -246,7 +246,7 @@ $("#ordersList").addEventListener("click", async e => {
     const data = await api(`/api/orders/${encodeURIComponent(open)}/open`, {method: "POST"});
     $("#ordersDlg").close();
     $("#log").innerHTML = "";
-    addMsg("assistant", `Открыт заказ-наряд № ${open}. Что нужно изменить?`);
+    addMsg("assistant", `Відкрито замовлення-наряд № ${open}. Що потрібно змінити?`);
     renderOrder(data.order);
   }
 });

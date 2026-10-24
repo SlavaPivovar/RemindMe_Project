@@ -1,7 +1,7 @@
-"""Операции над заказ-нарядом, которые помощник вызывает как инструменты.
+"""Операції над замовленням-нарядом, які помічник викликає як інструменти.
 
-Каждый публичный метод OrderSession становится инструментом Claude: описание и
-параметры берутся из docstring и сигнатуры.
+Кожен публічний метод OrderSession стає інструментом Claude: опис і
+параметри беруться з docstring і сигнатури.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ from .catalog import Catalog
 from .order import Customer, LaborLine, OrderStore, PartLine, RepairOrder, Vehicle
 from .render import render_html
 from .vin import decode_vin
+
+DRAFT = "чернетка"
 
 
 def _json(data) -> str:
@@ -30,7 +32,7 @@ class OrderSession:
     @property
     def _order(self) -> RepairOrder:
         if self.order is None:
-            raise ToolError("Заказ-наряд ещё не создан. Сначала вызовите new_order.")
+            raise ToolError("Замовлення-наряд ще не створено. Спершу викличте new_order.")
         return self.order
 
     def tool_methods(self) -> list:
@@ -42,10 +44,10 @@ class OrderSession:
             self.get_order, self.save_order,
         ]
 
-    # --- жизненный цикл ---
+    # --- життєвий цикл ---
 
     def new_order(self) -> str:
-        """Создать новый пустой заказ-наряд и сделать его текущим. Возвращает номер."""
+        """Створити нове порожнє замовлення-наряд і зробити його поточним. Повертає номер."""
         self.order = RepairOrder(
             number=self.store.next_number(),
             currency=self.catalog.currency,
@@ -55,35 +57,35 @@ class OrderSession:
         return _json({"number": self.order.number})
 
     def open_order(self, number: str) -> str:
-        """Открыть ранее сохранённый заказ-наряд для редактирования.
+        """Відкрити раніше збережене замовлення-наряд для редагування.
 
         Args:
-            number: Номер заказ-наряда, например ЗН-2026-00001.
+            number: Номер замовлення-наряду, наприклад ЗН-2026-00001.
         """
         try:
             self.order = self.store.load(number)
         except FileNotFoundError:
-            raise ToolError(f"Заказ-наряд {number} не найден") from None
+            raise ToolError(f"Замовлення-наряд {number} не знайдено") from None
         return self.get_order()
 
-    # --- клиент и автомобиль ---
+    # --- клієнт і автомобіль ---
 
     def set_customer(self, name: str, phone: str = "", email: str = "") -> str:
-        """Указать данные заказчика.
+        """Вказати дані замовника.
 
         Args:
-            name: ФИО заказчика или название организации.
-            phone: Контактный телефон.
-            email: Адрес электронной почты.
+            name: ПІБ замовника або назва організації.
+            phone: Контактний телефон.
+            email: Адреса електронної пошти.
         """
         self._order.customer = Customer(name=name.strip(), phone=phone.strip(), email=email.strip())
         return "ok"
 
     def decode_vin(self, vin: str) -> str:
-        """Расшифровать VIN Tesla: модель, модельный год, завод, проверка контрольной цифры.
+        """Розшифрувати VIN Tesla: модель, модельний рік, завод, перевірка контрольної цифри.
 
         Args:
-            vin: 17-значный VIN.
+            vin: 17-значний VIN.
         """
         info = decode_vin(vin)
         return _json(info.__dict__)
@@ -98,23 +100,23 @@ class OrderSession:
         model: str = "",
         year: int | None = None,
     ) -> str:
-        """Указать автомобиль. Модель и год заполняются автоматически по VIN; передавайте model/year
-        только если клиент их уточнил или VIN не расшифровывается.
+        """Вказати автомобіль. Модель і рік заповнюються автоматично за VIN; передавайте model/year
+        лише якщо клієнт їх уточнив або VIN не розшифровується.
 
         Args:
-            vin: 17-значный VIN.
-            odometer_km: Пробег в километрах.
-            plate: Государственный регистрационный номер.
-            color: Цвет кузова.
-            battery_percent: Уровень заряда высоковольтной батареи при приёмке, %.
-            model: Модель (Model S / 3 / X / Y / Cybertruck), если нужно задать вручную.
-            year: Модельный год, если нужно задать вручную.
+            vin: 17-значний VIN.
+            odometer_km: Пробіг у кілометрах.
+            plate: Державний реєстраційний номер.
+            color: Колір кузова.
+            battery_percent: Рівень заряду високовольтної батареї під час приймання, %.
+            model: Модель (Model S / 3 / X / Y / Cybertruck), якщо треба задати вручну.
+            year: Модельний рік, якщо треба задати вручну.
         """
         info = decode_vin(vin)
         if odometer_km is not None and odometer_km < 0:
-            raise ToolError("Пробег не может быть отрицательным")
+            raise ToolError("Пробіг не може бути від'ємним")
         if battery_percent is not None and not 0 <= battery_percent <= 100:
-            raise ToolError("Заряд батареи должен быть от 0 до 100 %")
+            raise ToolError("Заряд батареї має бути від 0 до 100 %")
         self._order.vehicle = Vehicle(
             vin=info.vin,
             model=model or info.model_name or "",
@@ -127,43 +129,43 @@ class OrderSession:
         )
         return _json({"vehicle": self._order.vehicle.__dict__, "vin_warnings": info.warnings})
 
-    # --- описание проблемы ---
+    # --- опис проблеми ---
 
     def add_complaint(self, text: str) -> str:
-        """Добавить жалобу/причину обращения клиента (своими словами клиента, кратко).
+        """Додати скаргу / причину звернення клієнта (словами клієнта, коротко).
 
         Args:
-            text: Формулировка жалобы.
+            text: Формулювання скарги.
         """
         self._order.complaints.append(text.strip())
-        return f"Жалоб: {len(self._order.complaints)}"
+        return f"Скарг: {len(self._order.complaints)}"
 
     def set_diagnosis(self, text: str) -> str:
-        """Записать результаты диагностики / заключение мастера.
+        """Записати результати діагностики / висновок майстра.
 
         Args:
-            text: Текст заключения.
+            text: Текст висновку.
         """
         self._order.diagnosis = text.strip()
         return "ok"
 
     def add_recommendation(self, text: str) -> str:
-        """Добавить рекомендацию клиенту (работы на будущее, не входящие в текущий заказ).
+        """Додати рекомендацію клієнту (роботи на майбутнє, що не входять у поточне замовлення).
 
         Args:
-            text: Текст рекомендации.
+            text: Текст рекомендації.
         """
         self._order.recommendations.append(text.strip())
         return "ok"
 
-    # --- справочник ---
+    # --- довідник ---
 
     def search_operations(self, query: str) -> str:
-        """Найти работы в справочнике по ключевым словам (например «колодки», «кондиционер»).
-        Учитывает модель автомобиля текущего заказа. Пустой запрос возвращает весь список.
+        """Знайти роботи в довіднику за ключовими словами (наприклад «колодки», «кондиціонер»).
+        Враховує модель автомобіля поточного замовлення. Порожній запит повертає весь список.
 
         Args:
-            query: Ключевые слова на русском.
+            query: Ключові слова українською.
         """
         model_code = self.order.vehicle.model_code if self.order else None
         ops = self.catalog.search_operations(query, model_code or None)
@@ -174,29 +176,29 @@ class OrderSession:
         ])
 
     def search_parts(self, query: str) -> str:
-        """Найти запчасти и материалы в справочнике по ключевым словам или артикулу.
+        """Знайти запчастини та матеріали в довіднику за ключовими словами або артикулом.
 
         Args:
-            query: Ключевые слова или артикул.
+            query: Ключові слова або артикул.
         """
         return _json([p.__dict__ for p in self.catalog.search_parts(query)])
 
-    # --- строки заказа ---
+    # --- рядки замовлення ---
 
     def add_operation(self, code: str, include_parts: bool = True, hours: float | None = None) -> str:
-        """Добавить работу из справочника по коду. По умолчанию добавляются и типовые запчасти к ней.
+        """Додати роботу з довідника за кодом. За замовчуванням додаються й типові запчастини до неї.
 
         Args:
-            code: Код работы из справочника (search_operations).
-            include_parts: Добавить типовые запчасти/материалы для этой работы.
-            hours: Нормо-часы, если нужно изменить норматив (например, для двух сторон).
+            code: Код роботи з довідника (search_operations).
+            include_parts: Додати типові запчастини/матеріали для цієї роботи.
+            hours: Нормогодини, якщо треба змінити норматив (наприклад, для двох сторін).
         """
         op = self.catalog.operations.get(code)
         if op is None:
-            raise ToolError(f"Работа с кодом {code} не найдена. Используйте search_operations.")
+            raise ToolError(f"Роботу з кодом {code} не знайдено. Скористайтеся search_operations.")
         order = self._order
         if not op.fits(order.vehicle.model_code or None):
-            raise ToolError(f"Работа {code} не применима к {order.vehicle.model}")
+            raise ToolError(f"Робота {code} не застосовна до {order.vehicle.model}")
         order.labor.append(LaborLine(code=op.code, name=op.name, hours=hours or op.hours, rate=self.catalog.labor_rate))
         added_parts = []
         if include_parts:
@@ -206,49 +208,49 @@ class OrderSession:
         return _json({"added_labor": op.code, "added_parts": added_parts, "totals": self._totals()})
 
     def add_custom_labor(self, name: str, hours: float, code: str = "CUSTOM") -> str:
-        """Добавить работу, которой нет в справочнике (по ставке нормо-часа сервиса).
+        """Додати роботу, якої немає в довіднику (за ставкою нормогодини сервісу).
 
         Args:
-            name: Наименование работы.
-            hours: Нормо-часы.
-            code: Код работы, если есть.
+            name: Назва роботи.
+            hours: Нормогодини.
+            code: Код роботи, якщо є.
         """
         if hours <= 0:
-            raise ToolError("Нормо-часы должны быть больше нуля")
+            raise ToolError("Нормогодини мають бути більші за нуль")
         self._order.labor.append(LaborLine(code=code, name=name, hours=hours, rate=self.catalog.labor_rate))
         return _json({"totals": self._totals()})
 
     def add_part(self, part_no: str, qty: float = 1) -> str:
-        """Добавить запчасть из справочника по артикулу.
+        """Додати запчастину з довідника за артикулом.
 
         Args:
-            part_no: Артикул из справочника (search_parts).
-            qty: Количество.
+            part_no: Артикул із довідника (search_parts).
+            qty: Кількість.
         """
         self._add_part_line(part_no, qty)
         return _json({"totals": self._totals()})
 
     def add_custom_part(self, name: str, qty: float, price: float, part_no: str = "", unit: str = "шт") -> str:
-        """Добавить запчасть, которой нет в справочнике (цену называет мастер).
+        """Додати запчастину, якої немає в довіднику (ціну називає майстер).
 
         Args:
-            name: Наименование.
-            qty: Количество.
-            price: Цена за единицу.
-            part_no: Каталожный номер Tesla, если известен.
-            unit: Единица измерения.
+            name: Назва.
+            qty: Кількість.
+            price: Ціна за одиницю.
+            part_no: Каталожний номер Tesla, якщо відомий.
+            unit: Одиниця виміру.
         """
         if qty <= 0 or price < 0:
-            raise ToolError("Количество должно быть больше нуля, цена — не отрицательной")
+            raise ToolError("Кількість має бути більша за нуль, ціна — невід'ємна")
         self._order.parts.append(PartLine(part_no=part_no, name=name, qty=qty, price=price, unit=unit))
         return _json({"totals": self._totals()})
 
     def _add_part_line(self, part_no: str, qty: float) -> None:
         part = self.catalog.parts.get(part_no)
         if part is None:
-            raise ToolError(f"Запчасть {part_no} не найдена. Используйте search_parts или add_custom_part.")
+            raise ToolError(f"Запчастину {part_no} не знайдено. Скористайтеся search_parts або add_custom_part.")
         if qty <= 0:
-            raise ToolError("Количество должно быть больше нуля")
+            raise ToolError("Кількість має бути більша за нуль")
         for line in self._order.parts:
             if line.part_no == part_no:
                 line.qty += qty
@@ -260,18 +262,18 @@ class OrderSession:
             return self._order.labor
         if kind == "parts":
             return self._order.parts
-        raise ToolError("kind должен быть 'labor' или 'parts'")
+        raise ToolError("kind має бути 'labor' або 'parts'")
 
     def set_discount(self, kind: str, line_number: int, percent: float) -> str:
-        """Установить скидку на строку заказа. line_number = 0 — на все строки этого вида.
+        """Встановити знижку на рядок замовлення. line_number = 0 — на всі рядки цього виду.
 
         Args:
-            kind: 'labor' — работы, 'parts' — запчасти.
-            line_number: Номер строки (с 1), как в get_order; 0 — все строки.
-            percent: Скидка в процентах (0–100).
+            kind: 'labor' — роботи, 'parts' — запчастини.
+            line_number: Номер рядка (з 1), як у get_order; 0 — усі рядки.
+            percent: Знижка у відсотках (0–100).
         """
         if not 0 <= percent <= 100:
-            raise ToolError("Скидка должна быть от 0 до 100 %")
+            raise ToolError("Знижка має бути від 0 до 100 %")
         lines = self._lines(kind)
         targets = lines if line_number == 0 else [self._line(lines, line_number)]
         for line in targets:
@@ -279,11 +281,11 @@ class OrderSession:
         return _json({"totals": self._totals()})
 
     def remove_line(self, kind: str, line_number: int) -> str:
-        """Удалить строку из заказа.
+        """Видалити рядок із замовлення.
 
         Args:
-            kind: 'labor' — работы, 'parts' — запчасти.
-            line_number: Номер строки (с 1), как в get_order.
+            kind: 'labor' — роботи, 'parts' — запчастини.
+            line_number: Номер рядка (з 1), як у get_order.
         """
         lines = self._lines(kind)
         removed = self._line(lines, line_number)
@@ -293,16 +295,16 @@ class OrderSession:
     @staticmethod
     def _line(lines: list, number: int):
         if not 1 <= number <= len(lines):
-            raise ToolError(f"Нет строки №{number}; всего строк: {len(lines)}")
+            raise ToolError(f"Немає рядка №{number}; усього рядків: {len(lines)}")
         return lines[number - 1]
 
-    # --- просмотр и сохранение ---
+    # --- перегляд і збереження ---
 
     def _totals(self) -> dict:
         return {k: str(v) for k, v in self._order.totals().items()}
 
     def snapshot(self) -> dict | None:
-        """Состояние заказа для интерфейса (не инструмент модели)."""
+        """Стан замовлення для інтерфейсу (не інструмент моделі)."""
         if self.order is None:
             return None
         data = self.order.to_dict()
@@ -310,23 +312,23 @@ class OrderSession:
         return data
 
     def get_order(self) -> str:
-        """Показать текущее состояние заказ-наряда: все поля, строки, итоги и чего не хватает."""
+        """Показати поточний стан замовлення-наряду: усі поля, рядки, підсумки та чого бракує."""
         data = self._order.to_dict()
         data["missing_fields"] = self._order.missing_fields()
         return _json(data)
 
-    def save_order(self, status: str = "открыт") -> str:
-        """Сохранить заказ-наряд (JSON + HTML для печати). Перед вызовом покажите клиенту итог и
-        получите подтверждение.
+    def save_order(self, status: str = "відкрито") -> str:
+        """Зберегти замовлення-наряд (JSON + HTML для друку). Перед викликом покажіть клієнту підсумок і
+        отримайте підтвердження.
 
         Args:
-            status: Статус: 'черновик', 'открыт' (принят в работу), 'выполнен', 'закрыт'.
+            status: Статус: 'чернетка', 'відкрито' (прийнято в роботу), 'виконано', 'закрито'.
         """
         order = self._order
         missing = order.missing_fields()
-        if missing and status != "черновик":
-            raise ToolError(f"Нельзя сохранить со статусом «{status}»: не заполнено — {', '.join(missing)}. "
-                            "Заполните поля или сохраните как 'черновик'.")
+        if missing and status != DRAFT:
+            raise ToolError(f"Не можна зберегти зі статусом «{status}»: не заповнено — {', '.join(missing)}. "
+                            f"Заповніть поля або збережіть як '{DRAFT}'.")
         order.status = status
         json_path = self.store.save(order)
         html_path = Path(json_path).with_suffix(".html")

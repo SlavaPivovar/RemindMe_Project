@@ -1,4 +1,4 @@
-"""Модель заказ-наряда и хранилище."""
+"""Модель замовлення-наряду та сховище."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ class PartLine:
 class RepairOrder:
     number: str
     created_at: str = field(default_factory=lambda: datetime.now().strftime("%d.%m.%Y %H:%M"))
-    status: str = "черновик"
+    status: str = "чернетка"
     customer: Customer = field(default_factory=Customer)
     vehicle: Vehicle = field(default_factory=Vehicle)
     complaints: list[str] = field(default_factory=list)
@@ -73,7 +73,7 @@ class RepairOrder:
     recommendations: list[str] = field(default_factory=list)
     labor: list[LaborLine] = field(default_factory=list)
     parts: list[PartLine] = field(default_factory=list)
-    currency: str = "₽"
+    currency: str = "$"
     vat_percent: float = 0
     prices_include_vat: bool = True
 
@@ -93,17 +93,17 @@ class RepairOrder:
     def missing_fields(self) -> list[str]:
         missing = []
         if not self.customer.name:
-            missing.append("ФИО клиента")
+            missing.append("ПІБ клієнта")
         if not self.customer.phone:
-            missing.append("телефон клиента")
+            missing.append("телефон клієнта")
         if not self.vehicle.vin:
             missing.append("VIN")
         if self.vehicle.odometer_km is None:
-            missing.append("пробег")
+            missing.append("пробіг")
         if not self.complaints:
-            missing.append("жалобы клиента")
+            missing.append("скарги клієнта")
         if not self.labor:
-            missing.append("работы")
+            missing.append("роботи")
         return missing
 
     def to_dict(self) -> dict:
@@ -126,7 +126,7 @@ NUMBER_RE = re.compile(r"^ЗН-\d{4}-\d{5}$")
 
 
 class OrderStore:
-    """Хранит заказ-наряды в виде JSON-файлов в каталоге."""
+    """Зберігає замовлення-наряди як JSON-файли в каталозі."""
 
     def __init__(self, directory: str | Path = "orders"):
         self.dir = Path(directory)
@@ -135,8 +135,8 @@ class OrderStore:
         self._reserved: set[str] = set()
 
     def next_number(self) -> str:
-        """Выдать новый номер. Номер резервируется, даже если заказ ещё не сохранён,
-        чтобы параллельные сеансы не получили одинаковые номера."""
+        """Видати новий номер. Номер резервується, навіть якщо замовлення ще не збережене,
+        щоб паралельні сеанси не отримали однакові номери."""
         year = datetime.now().year
         prefix = f"ЗН-{year}-"
         with self._lock:
