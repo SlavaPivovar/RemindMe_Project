@@ -26,6 +26,9 @@ from .order import OrderStore
 from .render import render_html
 from .order import STATUSES, StatusError
 from .tools import OrderSession
+from .usage import UsageLedger
+from .usage import add as add_usage
+from .usage import empty as empty_usage
 from .vision import PhotoError, parse_data_url, recognize
 
 STATIC = Path(__file__).parent / "static"
@@ -44,6 +47,7 @@ class Conversation:
     assistant: RepairOrderAssistant
     lock: threading.Lock = field(default_factory=threading.Lock)
     last_used: float = field(default_factory=time.monotonic)
+    pending_usage: dict = field(default_factory=empty_usage)  # витрати до появи замовлення-наряду
 
 
 class ChatIn(BaseModel):
@@ -86,6 +90,7 @@ def create_app(
     password: str | None = None,
     secure_cookies: bool = False,
     secret: str | None = None,
+    usage_path: str | Path | None = None,
 ) -> FastAPI:
     """password — пароль для входу; без нього вхід не потрібен (лише для локального запуску).
     catalog_path — файл довідника, який редагується з інтерфейсу; за його відсутності створюється
@@ -95,6 +100,7 @@ def create_app(
     else:
         catalog = Catalog(json.loads(DEFAULT_CATALOG.read_text(encoding="utf-8")))
     store = OrderStore(orders_dir)
+    ledger = UsageLedger(usage_path)
     client = client or anthropic.Anthropic()
     conversations: dict[str, Conversation] = {}
     conversations_lock = threading.Lock()
@@ -160,6 +166,19 @@ def create_app(
         resp.delete_cookie(AUTH_COOKIE)
         return resp
 
+    def charge(conv: Conversation, kind: str, cost: dict | None) -> None:
+        """Записати витрати в журнал і додати їх до поточного замовлення-наряду (якщо воно вже є)."""
+        if not cost or not cost.get("requests"):
+            return
+        order = conv.session.order
+        ledger.record(kind, cost, model, order.number if order else None)
+        if order is None:
+            add_usage(conv.pending_usage, cost)
+            return
+        order.ai_usage = add_usage(add_usage(dict(order.ai_usage), conv.pending_usage), cost)
+        conv.pending_usage = empty_usage()
+        conv.session._autosave()
+
     def new_conversation() -> Conversation:
         session = OrderSession(catalog, store)
         return Conversation(session, RepairOrderAssistant(session, client=client, model=model, effort=effort))
@@ -208,17 +227,33 @@ def create_app(
             with api_errors():
                 reply = conv.assistant.send(text)
         finally:
+            charge(conv, "chat", conv.assistant.last_turn_usage)
             conv.lock.release()
         return {"reply": reply, "order": conv.session.snapshot()}
 
     @app.post("/api/photo")
-    def photo(body: PhotoIn):
+    def photo(body: PhotoIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
         try:
             media_type, data = parse_data_url(body.image)
             with api_errors():
-                return recognize(client, model, media_type, data)
+                result = recognize(client, model, media_type, data)
         except PhotoError as exc:
+            with conv.lock:
+                charge(conv, "photo", exc.usage)
             raise HTTPException(400, str(exc)) from None
+        with conv.lock:
+            charge(conv, "photo", result["usage"])
+        return result
+
+    @app.get("/api/usage")
+    def usage_summary():
+        summary = ledger.summary()
+        # Середнє — за самими замовленнями-нарядами: туди входять і витрати, зроблені до їх створення (фото).
+        costs = [o.ai_usage.get("cost_usd", 0) for o in store.list() if o.ai_usage.get("requests")]
+        summary["orders"] = len(costs)
+        summary["avg_per_order"] = round(sum(costs) / len(costs), 4) if costs else 0
+        return summary
 
     @app.post("/api/order/status")
     def order_status(body: StatusIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
@@ -339,6 +374,7 @@ def create_app(
                 "vehicle": " ".join(x for x in (o.vehicle.model, str(o.vehicle.year or ""), o.vehicle.plate) if x),
                 "total": str(o.totals()["total"]),
                 "currency": o.currency,
+                "ai_cost": o.ai_usage.get("cost_usd", 0),
             }
             for o in store.list()
             if (not q or matches(o, q)) and (not status or o.status == status)
@@ -420,7 +456,8 @@ def main(argv: list[str] | None = None) -> int:
     data_dir = Path(args.orders_dir).resolve().parent
     catalog_path = args.catalog or data_dir / "catalog.json"
     app = create_app(catalog_path, args.orders_dir, model=args.model, effort=args.effort,
-                     password=password, secure_cookies=secure, secret=load_secret(data_dir))
+                     password=password, secure_cookies=secure, secret=load_secret(data_dir),
+                     usage_path=data_dir / "usage.jsonl")
     print(f"Відкрийте в браузері: http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True, forwarded_allow_ips="*")
     return 0

@@ -102,6 +102,7 @@ class RepairOrder:
     vat_percent: float = 0
     prices_include_vat: bool = True
     status_log: list[dict] = field(default_factory=list)  # [{"status": ..., "at": "дд.мм.рррр гг:хх"}]
+    ai_usage: dict = field(default_factory=dict)  # витрати на Claude по цьому замовленню (див. usage.py)
 
     def set_status(self, status: str) -> None:
         status = LEGACY_STATUSES.get(status.strip().lower(), status.strip().lower())

@@ -8,3 +8,4 @@ build/
 /catalog.json
 /catalog.tmp
 /.auth_secret
+/usage.jsonl

@@ -5,6 +5,7 @@ from __future__ import annotations
 import anthropic
 from anthropic import beta_tool
 
+from . import usage as usage_mod
 from .tools import OrderSession
 
 MODEL = "claude-opus-5-5"
@@ -70,6 +71,7 @@ class RepairOrderAssistant:
         self.system = SYSTEM_PROMPT.replace("{service}", f" {name}" if name else "")
         self.tools = [beta_tool(m) for m in session.tool_methods()]
         self.messages: list = []
+        self.last_turn_usage: dict = usage_mod.empty()  # витрати останньої репліки (усі запити ходу)
 
     def send(self, text: str) -> str:
         """Надіслати репліку майстра й повернути відповідь помічника (після всіх викликів інструментів).
@@ -77,6 +79,7 @@ class RepairOrderAssistant:
         У разі помилки API історія діалогу повертається до стану перед цією реплікою.
         """
         start = len(self.messages)
+        self.last_turn_usage = usage_mod.empty()
         self.messages.append({"role": "user", "content": text})
         try:
             last = self._run()
@@ -110,6 +113,8 @@ class RepairOrderAssistant:
         last = None
         for message in runner:
             last = message
+            # Рахуємо одразу: навіть якщо далі станеться помилка, за цей запит уже заплачено.
+            usage_mod.add(self.last_turn_usage, usage_mod.from_response(message.usage, message.model))
             # Ранер зберігає власну копію історії — дзеркалимо її, щоб продовжити діалог.
             self.messages.append({"role": "assistant", "content": message.content})
             tool_response = runner.generate_tool_call_response()

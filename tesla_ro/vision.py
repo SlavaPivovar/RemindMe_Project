@@ -9,6 +9,7 @@ import re
 
 import anthropic
 
+from . import usage as usage_mod
 from .vin import decode_vin
 
 MEDIA_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
@@ -37,7 +38,12 @@ SCHEMA = {
 
 
 class PhotoError(ValueError):
-    """Фото не вдалося обробити; текст повідомлення показується користувачу."""
+    """Фото не вдалося обробити; текст повідомлення показується користувачу.
+    usage — витрати, якщо запит до API вже відбувся."""
+
+    def __init__(self, message: str, usage: dict | None = None):
+        super().__init__(message)
+        self.usage = usage
 
 
 def parse_data_url(data_url: str) -> tuple[str, str]:
@@ -78,14 +84,15 @@ def recognize(client: anthropic.Anthropic, model: str, media_type: str, data: st
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
     )
+    cost = usage_mod.from_response(response.usage, response.model)
     if response.stop_reason == "refusal":
-        raise PhotoError("Модель відмовилася обробити це фото")
+        raise PhotoError("Модель відмовилася обробити це фото", cost)
     text = next((b.text for b in response.content if b.type == "text"), "")
     try:
         raw = json.loads(text)
     except json.JSONDecodeError:
-        raise PhotoError("Не вдалося розпізнати фото, спробуйте ще раз") from None
-    return summarize(raw)
+        raise PhotoError("Не вдалося розпізнати фото, спробуйте ще раз", cost) from None
+    return {**summarize(raw), "usage": cost}
 
 
 def summarize(raw: dict) -> dict:

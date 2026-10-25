@@ -132,6 +132,16 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .st-4{background:rgba(71,85,105,.16);color:#334155}
 .st-5{background:rgba(220,38,38,.12);color:#b91c1c}
 .status-log{font-size:12px;color:var(--muted);margin:-6px 0 12px}
+.ai-cost{font-size:12px;color:var(--muted);margin:-6px 0 12px}
+.usage{border-top:1px solid var(--line);margin-top:8px;padding-top:4px}
+.usage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0 14px}
+.usage-tile{background:var(--bot);border-radius:10px;padding:10px 12px}
+.usage-tile b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.usage-tile span{color:var(--muted);font-size:12px}
+.bars{display:flex;align-items:flex-end;gap:4px;height:90px;padding-top:6px}
+.bars div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;min-width:0}
+.bars i{display:block;width:100%;background:var(--accent);border-radius:3px 3px 0 0;min-height:1px;opacity:.85}
+.bars small{font-size:10px;color:var(--muted);margin-top:3px;white-space:nowrap}
 .filter-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
 .filter-chips button{font-size:12px;padding:4px 10px;border-radius:999px}
 .filter-chips button.on{background:var(--text);color:var(--bg);border-color:var(--text)}
@@ -216,6 +226,8 @@ const num = v => Number(v).toLocaleString("uk-UA", {minimumFractionDigits: 2, ma
 const dash = v => (v === null || v === undefined || v === "") ? "—" : esc(v);
 let busy = false;
 let STATUSES = ["чернетка", "прийнято", "в роботі", "готово", "видано", "скасовано"];
+const usd = c => c > 0 && c < 0.01 ? "< $0,01" : "$" + Number(c || 0).toLocaleString("uk-UA",
+  {minimumFractionDigits: 2, maximumFractionDigits: c < 1 ? 3 : 2});
 const stClass = s => "st-" + Math.max(0, STATUSES.indexOf(s));
 
 function md(text){
@@ -275,6 +287,7 @@ function renderOrder(o){
       <span class="badge">${esc(o.created_at)}</span>
       <div class="actions"><button id="btnPrint">🖨 Друк</button></div>
     </div>
+    ${o.ai_usage && o.ai_usage.requests ? `<div class="ai-cost" title="Вартість запитів до Claude по цьому замовленню-наряду (у друковану форму не потрапляє)">Claude: ${usd(o.ai_usage.cost_usd)} · запитів: ${o.ai_usage.requests}</div>` : ""}
     ${o.status_log && o.status_log.length ? `<div class="status-log">${o.status_log.slice(-5).map(e => `${esc(e.status)} ${esc(e.at)}`).join(" → ")}</div>` : ""}
     ${o.missing_fields.length ? `<div class="missing">Не заповнено: ${o.missing_fields.map(esc).join(", ")}</div>` : `<div class="done">✓ Усі обов'язкові поля заповнено</div>`}
     <div class="info">
@@ -411,9 +424,9 @@ async function showOrders(){
     if (ordersStatus) params.set("status", ordersStatus);
     const list = await api("/api/orders" + (params.toString() ? "?" + params : ""));
     $("#ordersList").innerHTML = list.length ? `<div class="tbl"><table>
-      <tr><th>Номер</th><th>Дата</th><th>Клієнт</th><th>Автомобіль</th><th class="r">Сума</th><th>Статус</th><th></th></tr>
+      <tr><th>Номер</th><th>Дата</th><th>Клієнт</th><th>Автомобіль</th><th class="r">Сума</th><th>Статус</th><th class="r" title="Витрати на Claude">Claude</th><th></th></tr>
       ${list.map(o => `<tr><td>${esc(o.number)}</td><td>${esc(o.created_at)}</td><td>${dash(o.customer)}</td><td>${dash(o.vehicle)}</td>
-        <td class="r">${num(o.total)} ${esc(o.currency)}</td><td><span class="badge ${stClass(o.status)}">${esc(o.status)}</span></td>
+        <td class="r">${num(o.total)} ${esc(o.currency)}</td><td><span class="badge ${stClass(o.status)}">${esc(o.status)}</span></td><td class="r sub">${o.ai_cost ? usd(o.ai_cost) : "—"}</td>
         <td class="r"><button data-open="${esc(o.number)}">Відкрити</button> <button data-print="${esc(o.number)}">🖨</button></td></tr>`).join("")}
       </table></div>` : `<div class="empty">${q || ordersStatus ? "Нічого не знайдено." : "Збережених замовлень-нарядів поки немає."}</div>`;
   }catch(e){ $("#ordersList").textContent = e.message; }
@@ -688,7 +701,9 @@ function renderSettingsForm(flash){
       <span></span>
       <div><div class="form-err" id="formErr" hidden></div>
         <div class="form-actions"><button class="primary" type="submit">Зберегти</button></div></div>
-    </form>`;
+    </form>
+    <div class="usage" id="usageBox"><h3>Витрати на Claude</h3><div class="sub">Завантаження…</div></div>`;
+  loadUsage();
   $("#setForm").onsubmit = async e => {
     e.preventDefault();
     const body = {name: $("#sName").value, address: $("#sAddr").value, phone: $("#sPhone").value, inn: $("#sInn").value,
@@ -697,6 +712,21 @@ function renderSettingsForm(flash){
       $("#brand").textContent = catalogData.settings.name; document.title = catalogData.settings.name;
     }
   };
+}
+
+async function loadUsage(){
+  try{
+    const u = await api("/api/usage");
+    const tile = (label, v) => `<div class="usage-tile"><b>${usd(v.cost_usd)}</b><span>${label} · запитів: ${v.requests}</span></div>`;
+    const max = Math.max(...u.by_day.map(d => d.cost_usd), 0.0001);
+    $("#usageBox").innerHTML = `<h3>Витрати на Claude</h3>
+      <div class="usage-grid">${tile("сьогодні", u.today)}${tile("цей місяць", u.month)}${tile("усього", u.all)}
+        <div class="usage-tile"><b>${usd(u.avg_per_order)}</b><span>у середньому на замовлення-наряд (${u.orders})</span></div></div>
+      <div class="sub">По днях за 2 тижні</div>
+      <div class="bars">${u.by_day.map(d => `<div title="${esc(d.day)}: ${usd(d.cost_usd)}, запитів: ${d.requests}">
+        <i style="height:${Math.round(d.cost_usd / max * 100)}%"></i><small>${esc(d.day.slice(8))}</small></div>`).join("")}</div>
+      <div class="hint">Оцінка за тарифами моделі й фактичними токенами з відповідей API. Точна сума — у console.anthropic.com → Usage.</div>`;
+  }catch(e){ $("#usageBox").innerHTML = `<h3>Витрати на Claude</h3><div class="sub">${esc(e.message)}</div>`; }
 }
 
 $("#btnCatalog").onclick = async () => {
