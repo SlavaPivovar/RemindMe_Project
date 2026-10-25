@@ -60,7 +60,7 @@ def test_full_flow(tmp_path):
     assert r["reply"] == "Замовлення-наряд **збережено**."
     order = r["order"]
     assert order["vehicle"]["model"] == "Model 3"
-    assert order["status"] == "відкрито" and order["missing_fields"] == []
+    assert order["status"] == "прийнято" and order["missing_fields"] == []
     assert order["totals"]["total"] == "222.00"
 
     # історія та замовлення відновлюються після перезавантаження сторінки

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import hmac
 import html
@@ -23,7 +24,9 @@ from .assistant import MODEL, RepairOrderAssistant
 from .catalog import DEFAULT_CATALOG, MODEL_CODES, Catalog, CatalogError
 from .order import OrderStore
 from .render import render_html
+from .order import STATUSES, StatusError
 from .tools import OrderSession
+from .vision import PhotoError, parse_data_url, recognize
 
 STATIC = Path(__file__).parent / "static"
 COOKIE = "tesla_ro_sid"
@@ -45,6 +48,33 @@ class Conversation:
 
 class ChatIn(BaseModel):
     text: str
+
+
+class PhotoIn(BaseModel):
+    image: str  # data:image/jpeg;base64,...
+
+
+class StatusIn(BaseModel):
+    status: str
+
+
+@contextlib.contextmanager
+def api_errors():
+    """Перетворити помилки Anthropic API на зрозумілі повідомлення для інтерфейсу."""
+    try:
+        yield
+    except anthropic.AuthenticationError:
+        raise HTTPException(503, "Невірний ключ API Anthropic (ANTHROPIC_API_KEY)") from None
+    except anthropic.RateLimitError:
+        raise HTTPException(429, "Перевищено ліміт запитів до API, спробуйте за хвилину") from None
+    except anthropic.APIStatusError as exc:
+        raise HTTPException(502, f"Помилка API ({exc.status_code}): {exc.message}") from None
+    except anthropic.APIConnectionError:
+        raise HTTPException(502, "Немає з'єднання з API Anthropic") from None
+    except TypeError as exc:
+        if "authentication" not in str(exc):
+            raise
+        raise HTTPException(503, "Не задано ключ API: встановіть змінну оточення ANTHROPIC_API_KEY") from None
 
 
 def create_app(
@@ -163,6 +193,7 @@ def create_app(
                 if text:
                     history.append({"role": "assistant", "text": text})
         return {"order": conv.session.snapshot(), "history": history, "service": catalog.service,
+                "statuses": STATUSES,
                 "auth": password is not None}
 
     @app.post("/api/chat")
@@ -174,22 +205,40 @@ def create_app(
         if not conv.lock.acquire(blocking=False):
             raise HTTPException(409, "Помічник ще відповідає на попереднє повідомлення")
         try:
-            reply = conv.assistant.send(text)
-        except anthropic.AuthenticationError:
-            raise HTTPException(503, "Невірний ключ API Anthropic (ANTHROPIC_API_KEY)") from None
-        except anthropic.RateLimitError:
-            raise HTTPException(429, "Перевищено ліміт запитів до API, спробуйте за хвилину") from None
-        except anthropic.APIStatusError as exc:
-            raise HTTPException(502, f"Помилка API ({exc.status_code}): {exc.message}") from None
-        except anthropic.APIConnectionError:
-            raise HTTPException(502, "Немає з'єднання з API Anthropic") from None
-        except TypeError as exc:
-            if "authentication" not in str(exc):
-                raise
-            raise HTTPException(503, "Не задано ключ API: встановіть змінну оточення ANTHROPIC_API_KEY") from None
+            with api_errors():
+                reply = conv.assistant.send(text)
         finally:
             conv.lock.release()
         return {"reply": reply, "order": conv.session.snapshot()}
+
+    @app.post("/api/photo")
+    def photo(body: PhotoIn):
+        try:
+            media_type, data = parse_data_url(body.image)
+            with api_errors():
+                return recognize(client, model, media_type, data)
+        except PhotoError as exc:
+            raise HTTPException(400, str(exc)) from None
+
+    @app.post("/api/order/status")
+    def order_status(body: StatusIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+        if conv.session.order is None:
+            raise HTTPException(404, "Замовлення-наряд ще не створено")
+        if not conv.lock.acquire(blocking=False):
+            raise HTTPException(409, "Помічник ще відповідає — спробуйте за мить")
+        try:
+            try:
+                conv.session.order.set_status(body.status)
+            except StatusError as exc:
+                raise HTTPException(400, str(exc)) from None
+            try:
+                store.save(conv.session.order)
+            except OSError:
+                raise HTTPException(500, "Не вдалося зберегти замовлення-наряд") from None
+        finally:
+            conv.lock.release()
+        return {"order": conv.session.snapshot()}
 
     @app.post("/api/reset")
     def reset(response: Response, tesla_ro_sid: str | None = Cookie(None)):
@@ -277,7 +326,7 @@ def create_app(
         return all(w in text for w in q.lower().split())
 
     @app.get("/api/orders")
-    def orders(q: str = ""):
+    def orders(q: str = "", status: str = ""):
         q = q.strip()
         return [
             {
@@ -292,7 +341,7 @@ def create_app(
                 "currency": o.currency,
             }
             for o in store.list()
-            if not q or matches(o, q)
+            if (not q or matches(o, q)) and (not status or o.status == status)
         ]
 
     @app.post("/api/orders/{number}/open")

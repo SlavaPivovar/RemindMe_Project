@@ -16,6 +16,22 @@ def money(value: float | Decimal) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+# Життєвий цикл замовлення-наряду.
+DRAFT = "чернетка"
+CANCELLED = "скасовано"
+STATUSES = (DRAFT, "прийнято", "в роботі", "готово", "видано", CANCELLED)
+# Статуси попередніх версій програми.
+LEGACY_STATUSES = {"відкрито": "прийнято", "виконано": "готово", "закрито": "видано"}
+
+
+class StatusError(ValueError):
+    """Статус не можна встановити; текст повідомлення показується користувачу."""
+
+
+def now_str() -> str:
+    return datetime.now().strftime("%d.%m.%Y %H:%M")
+
+
 @dataclass
 class Customer:
     name: str = ""
@@ -73,8 +89,8 @@ class PartLine:
 @dataclass
 class RepairOrder:
     number: str
-    created_at: str = field(default_factory=lambda: datetime.now().strftime("%d.%m.%Y %H:%M"))
-    status: str = "чернетка"
+    created_at: str = field(default_factory=now_str)
+    status: str = DRAFT
     customer: Customer = field(default_factory=Customer)
     vehicle: Vehicle = field(default_factory=Vehicle)
     complaints: list[str] = field(default_factory=list)
@@ -85,6 +101,18 @@ class RepairOrder:
     currency: str = "$"
     vat_percent: float = 0
     prices_include_vat: bool = True
+    status_log: list[dict] = field(default_factory=list)  # [{"status": ..., "at": "дд.мм.рррр гг:хх"}]
+
+    def set_status(self, status: str) -> None:
+        status = LEGACY_STATUSES.get(status.strip().lower(), status.strip().lower())
+        if status not in STATUSES:
+            raise StatusError(f"Невідомий статус «{status}». Можливі: {', '.join(STATUSES)}")
+        missing = self.missing_fields()
+        if missing and status not in (DRAFT, CANCELLED):
+            raise StatusError(f"Не можна встановити статус «{status}»: не заповнено — {', '.join(missing)}")
+        if status != self.status:
+            self.status = status
+            self.status_log.append({"status": status, "at": now_str()})
 
     def totals(self) -> dict[str, Decimal]:
         labor = sum((line.total for line in self.labor), Decimal("0"))
@@ -128,6 +156,7 @@ class RepairOrder:
         data["vehicle"] = Vehicle(**data.get("vehicle", {}))
         data["labor"] = [LaborLine.from_dict(x) for x in data.get("labor", [])]
         data["parts"] = [PartLine(**x) for x in data.get("parts", [])]
+        data["status"] = LEGACY_STATUSES.get(data.get("status", DRAFT), data.get("status", DRAFT))
         return cls(**data)
 
 

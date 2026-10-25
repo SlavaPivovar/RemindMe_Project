@@ -14,11 +14,10 @@ from pathlib import Path
 from anthropic.lib.tools import ToolError
 
 from .catalog import Catalog
-from .order import Customer, LaborLine, OrderStore, PartLine, RepairOrder, Vehicle
+from .order import DRAFT, Customer, LaborLine, OrderStore, PartLine, RepairOrder, StatusError, Vehicle
 from .render import render_html
 from .vin import decode_vin
 
-DRAFT = "чернетка"
 log = logging.getLogger(__name__)
 
 
@@ -424,19 +423,19 @@ class OrderSession:
         data["missing_fields"] = self._order.missing_fields()
         return _json(data)
 
-    def save_order(self, status: str = "відкрито") -> str:
-        """Зберегти замовлення-наряд (JSON + HTML для друку). Перед викликом покажіть клієнту підсумок і
-        отримайте підтвердження.
+    def save_order(self, status: str = "прийнято") -> str:
+        """Зберегти замовлення-наряд зі статусом (JSON + HTML для друку). Перед прийняттям у роботу покажіть
+        підсумок і отримайте підтвердження майстра.
 
         Args:
-            status: Статус: 'чернетка', 'відкрито' (прийнято в роботу), 'виконано', 'закрито'.
+            status: 'чернетка'; 'прийнято' — прийнято в роботу; 'в роботі'; 'готово' — роботи виконано,
+                авто чекає на клієнта; 'видано' — авто видано, оплачено; 'скасовано'.
         """
         order = self._order
-        missing = order.missing_fields()
-        if missing and status != DRAFT:
-            raise ToolError(f"Не можна зберегти зі статусом «{status}»: не заповнено — {', '.join(missing)}. "
-                            f"Заповніть поля або збережіть як '{DRAFT}'.")
-        order.status = status
+        try:
+            order.set_status(status)
+        except StatusError as exc:
+            raise ToolError(f"{exc}. Заповніть поля або залиште як '{DRAFT}'.") from None
         json_path = self.store.save(order)
         html_path = Path(json_path).with_suffix(".html")
         html_path.write_text(render_html(order, self.catalog.service), encoding="utf-8")

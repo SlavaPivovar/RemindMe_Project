@@ -85,7 +85,7 @@ def test_discount_and_remove(session):
 def test_save_requires_fields(session, tmp_path):
     session.new_order()
     with pytest.raises(ToolError, match="не заповнено"):
-        session.save_order("відкрито")
+        session.save_order("прийнято")
     session.save_order("чернетка")
     fill(session)
     session.add_operation("BRK-PAD-F")
@@ -94,7 +94,7 @@ def test_save_requires_fields(session, tmp_path):
     assert "ЗАМОВЛЕННЯ-НАРЯД" in html and "5YJ3E1EA9LF000316" in html and "Скрип під час гальмування" in html
     reopened = session.store.load(session.order.number)
     assert reopened.totals() == session.order.totals()
-    assert reopened.status == "відкрито"
+    assert reopened.status == "прийнято"
 
 
 def test_html_escapes(session):

@@ -16,12 +16,18 @@
     --accent:#ef5350; --accent-ink:#fff; --user:#e8eaed; --user-ink:#111; --bot:#20242c;
     --warn-bg:#3a2a10; --warn:#f3b664; --ok:#5fd38a; --shadow:none;
   }
+  :root:not([data-theme="light"]) .st-1{color:#93b4ff} :root:not([data-theme="light"]) .st-2{color:#f3b664}
+  :root:not([data-theme="light"]) .st-3{color:#5fd38a} :root:not([data-theme="light"]) .st-4{color:#cbd5e1}
+  :root:not([data-theme="light"]) .st-5{color:#f87171}
 }
 :root[data-theme="dark"]{
   --bg:#0f1115; --panel:#171a20; --text:#e8eaed; --muted:#9aa1ad; --line:#2a2f38;
   --accent:#ef5350; --accent-ink:#fff; --user:#e8eaed; --user-ink:#111; --bot:#20242c;
   --warn-bg:#3a2a10; --warn:#f3b664; --ok:#5fd38a; --shadow:none;
 }
+:root[data-theme="dark"] .st-1{color:#93b4ff} :root[data-theme="dark"] .st-2{color:#f3b664}
+:root[data-theme="dark"] .st-3{color:#5fd38a} :root[data-theme="dark"] .st-4{color:#cbd5e1}
+:root[data-theme="dark"] .st-5{color:#f87171}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;display:flex;flex-direction:column}
@@ -118,6 +124,19 @@ dialog td button{padding:3px 8px;font-size:12px}
 .visit-head button{padding:2px 8px;font-size:12px}
 .visit ul{margin:4px 0 0;padding-left:18px}
 .rec{color:var(--warn)}
+select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;padding:3px 10px;border:1px solid transparent;cursor:pointer}
+.status,.st{background:var(--bot);color:var(--muted)}
+.st-1{background:rgba(37,99,235,.13);color:#1d4ed8}
+.st-2{background:rgba(217,119,6,.15);color:#a35a00}
+.st-3{background:rgba(22,163,74,.14);color:#15803d}
+.st-4{background:rgba(71,85,105,.16);color:#334155}
+.st-5{background:rgba(220,38,38,.12);color:#b91c1c}
+.status-log{font-size:12px;color:var(--muted);margin:-6px 0 12px}
+.filter-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.filter-chips button{font-size:12px;padding:4px 10px;border-radius:999px}
+.filter-chips button.on{background:var(--text);color:var(--bg);border-color:var(--text)}
+.send-icon{display:none;width:20px;height:20px}
+.msg.user img{display:block;max-width:200px;max-height:200px;border-radius:8px;margin-bottom:4px}
 @media (max-width:900px){
   .tabs{display:flex}
   main{grid-template-columns:minmax(0,1fr);padding:8px 16px 16px}
@@ -128,6 +147,9 @@ dialog td button{padding:3px 8px;font-size:12px}
   #catalogList .show-m{display:inline}
   #catalogList th,#catalogList td{padding:6px 4px}
   .form{grid-template-columns:1fr;gap:4px}
+  #send{width:48px;padding:0;display:flex;align-items:center;justify-content:center;flex:none}
+  #send .send-label{display:none}
+  #send .send-icon{display:block}
   .form label{padding-top:8px}
   header .label{display:none}
 }
@@ -154,10 +176,14 @@ dialog td button{padding:3px 8px;font-size:12px}
     </div>
     <form class="composer" id="composer">
       <textarea id="input" rows="2" placeholder="Клієнт, автомобіль, скарги… (Enter — надіслати, Shift+Enter — новий рядок)"></textarea>
+      <button type="button" class="mic" id="photoBtn" title="Фото VIN або одометра" aria-label="Фото VIN або одометра">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h2l2-2h6l2 2h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="4"/></svg>
+      </button>
+      <input type="file" id="photoInput" accept="image/*" hidden>
       <button type="button" class="mic" id="mic" title="Голосове введення" aria-label="Голосове введення" aria-pressed="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg>
       </button>
-      <button class="primary" id="send">Надіслати</button>
+      <button class="primary" id="send" aria-label="Надіслати"><span class="send-label">Надіслати</span><svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button>
     </form>
   </section>
   <section id="order" class="card"><div class="body" id="orderBody"></div></section>
@@ -178,6 +204,7 @@ dialog td button{padding:3px 8px;font-size:12px}
   <div class="dh"><h2>Збережені замовлення-наряди</h2><button id="closeDlg">✕</button></div>
   <div class="db">
     <div class="toolbar"><input id="ordersQuery" type="search" placeholder="Пошук: VIN, телефон, ПІБ, держномер або номер"></div>
+    <div class="filter-chips" id="statusFilter"></div>
     <div id="ordersList"></div>
   </div>
 </dialog>
@@ -188,6 +215,8 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const num = v => Number(v).toLocaleString("uk-UA", {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const dash = v => (v === null || v === undefined || v === "") ? "—" : esc(v);
 let busy = false;
+let STATUSES = ["чернетка", "прийнято", "в роботі", "готово", "видано", "скасовано"];
+const stClass = s => "st-" + Math.max(0, STATUSES.indexOf(s));
 
 function md(text){
   // Мінімальна розмітка: абзаци, списки, **жирний**, `код`.
@@ -240,9 +269,13 @@ function renderOrder(o){
   const vat = o.prices_include_vat ? `у т.ч. ПДВ ${esc(o.vat_percent)}%` : `ПДВ ${esc(o.vat_percent)}%`;
   box.innerHTML = `
     <div class="ohead">
-      <h2>№ ${esc(o.number)}</h2><span class="badge">${esc(o.status)}</span><span class="badge">${esc(o.created_at)}</span>
+      <h2>№ ${esc(o.number)}</h2>
+      <select class="status ${stClass(o.status)}" id="statusSel" title="Статус замовлення-наряду">
+        ${STATUSES.map(s => `<option ${s === o.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
+      <span class="badge">${esc(o.created_at)}</span>
       <div class="actions"><button id="btnPrint">🖨 Друк</button></div>
     </div>
+    ${o.status_log && o.status_log.length ? `<div class="status-log">${o.status_log.slice(-5).map(e => `${esc(e.status)} ${esc(e.at)}`).join(" → ")}</div>` : ""}
     ${o.missing_fields.length ? `<div class="missing">Не заповнено: ${o.missing_fields.map(esc).join(", ")}</div>` : `<div class="done">✓ Усі обов'язкові поля заповнено</div>`}
     <div class="info">
       <dl><dt>Замовник</dt><dd>${dash(c.name)}</dd><dt>Телефон</dt><dd>${dash(c.phone)}</dd><dt>E-mail</dt><dd>${dash(c.email)}</dd></dl>
@@ -272,6 +305,16 @@ function renderOrder(o){
     </div>
     ${o.recommendations.length ? `<h3>Рекомендації</h3><ul class="plain">${o.recommendations.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}`;
   $("#btnPrint").onclick = () => window.open("/print/current", "_blank");
+  $("#statusSel").onchange = async e => {
+    const status = e.target.value;
+    try{
+      renderOrder((await api("/api/order/status", {method: "POST", body: JSON.stringify({status})})).order);
+    }catch(err){
+      e.target.value = o.status;
+      addMsg("error", err.message);
+      document.querySelector('.tabs button[data-tab="chat"]').click();
+    }
+  };
 }
 
 async function api(path, opts = {}){
@@ -355,22 +398,32 @@ async function send(text){
   }
 }
 
-let ordersTimer = null;
+let ordersTimer = null, ordersStatus = "";
 async function showOrders(){
   if (!$("#ordersDlg").open){ $("#ordersQuery").value = ""; $("#ordersDlg").showModal(); }
   $("#ordersList").innerHTML = "Завантаження…";
   const q = $("#ordersQuery").value.trim();
+  $("#statusFilter").innerHTML = ["", ...STATUSES].map(s =>
+    `<button data-status="${esc(s)}" class="${s === ordersStatus ? "on" : ""}">${s ? esc(s) : "усі"}</button>`).join("");
   try{
-    const list = await api("/api/orders" + (q ? "?q=" + encodeURIComponent(q) : ""));
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (ordersStatus) params.set("status", ordersStatus);
+    const list = await api("/api/orders" + (params.toString() ? "?" + params : ""));
     $("#ordersList").innerHTML = list.length ? `<div class="tbl"><table>
       <tr><th>Номер</th><th>Дата</th><th>Клієнт</th><th>Автомобіль</th><th class="r">Сума</th><th>Статус</th><th></th></tr>
       ${list.map(o => `<tr><td>${esc(o.number)}</td><td>${esc(o.created_at)}</td><td>${dash(o.customer)}</td><td>${dash(o.vehicle)}</td>
-        <td class="r">${num(o.total)} ${esc(o.currency)}</td><td>${esc(o.status)}</td>
+        <td class="r">${num(o.total)} ${esc(o.currency)}</td><td><span class="badge ${stClass(o.status)}">${esc(o.status)}</span></td>
         <td class="r"><button data-open="${esc(o.number)}">Відкрити</button> <button data-print="${esc(o.number)}">🖨</button></td></tr>`).join("")}
-      </table></div>` : `<div class="empty">${q ? "Нічого не знайдено." : "Збережених замовлень-нарядів поки немає."}</div>`;
+      </table></div>` : `<div class="empty">${q || ordersStatus ? "Нічого не знайдено." : "Збережених замовлень-нарядів поки немає."}</div>`;
   }catch(e){ $("#ordersList").textContent = e.message; }
 }
 
+$("#statusFilter").onclick = e => {
+  if (e.target.dataset.status === undefined) return;
+  ordersStatus = e.target.dataset.status;
+  showOrders();
+};
 $("#ordersQuery").oninput = () => { clearTimeout(ordersTimer); ordersTimer = setTimeout(showOrders, 250); };
 $("#ordersList").addEventListener("click", async e => {
   const open = e.target.dataset.open, print = e.target.dataset.print;
@@ -389,6 +442,61 @@ $("#orderBody").addEventListener("click", e => {
   if (n) window.open("/print/" + encodeURIComponent(n), "_blank");
 });
 $("#mic").onclick = () => recognizer ? stopVoice() : startVoice();
+
+// ---------- Фото VIN / одометра ----------
+async function shrinkPhoto(file){
+  // Зменшуємо до 1600 px по довшій стороні: так швидше й дешевше, а текст лишається читабельним.
+  const url = URL.createObjectURL(file);
+  try{
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("Не вдалося відкрити фото"));
+      i.src = url;
+    });
+    const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.naturalWidth * k);
+    canvas.height = Math.round(img.naturalHeight * k);
+    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.85);
+  }finally{ URL.revokeObjectURL(url); }
+}
+
+$("#photoBtn").onclick = () => { if (!busy) $("#photoInput").click(); };
+$("#photoInput").onchange = async e => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file || busy) return;
+  stopVoice();
+  busy = true; $("#send").disabled = $("#photoBtn").disabled = true;
+  const typing = document.createElement("div");
+  try{
+    const image = await shrinkPhoto(file);
+    const bubble = addMsg("user", "📷 Фото");
+    bubble.insertAdjacentHTML("afterbegin", `<img alt="Фото" src="${image}">`);
+    typing.className = "typing"; typing.textContent = "Розпізнаю фото";
+    $("#log").appendChild(typing); $("#log").scrollTop = $("#log").scrollHeight;
+    const r = await api("/api/photo", {method: "POST", body: JSON.stringify({image})});
+    typing.remove();
+    if (!r.text){
+      addMsg("error", "На фото не знайдено VIN чи пробігу" + (r.notes ? ": " + r.notes : "") + ". Спробуйте зняти ближче й рівніше.");
+      return;
+    }
+    const input = $("#input");
+    input.value = (input.value.trim() ? input.value.trim() + " " : "") + r.text;
+    const notes = [...r.warnings, ...(r.notes ? [r.notes] : [])];
+    addMsg("assistant", `Розпізнано: **${r.text.replace(/^З фото: /, "")}**\n` +
+      (notes.length ? notes.map(n => "- ⚠ " + n).join("\n") + "\n" : "") +
+      "Перевірте текст у полі введення, допишіть, якщо потрібно, і натисніть «Надіслати».");
+    input.focus();
+  }catch(err){
+    typing.remove();
+    addMsg("error", err.message);
+  }finally{
+    busy = false; $("#send").disabled = $("#photoBtn").disabled = false;
+  }
+};
 $("#composer").addEventListener("submit", e => { e.preventDefault(); send($("#input").value); });
 $("#input").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); send($("#input").value); }
@@ -627,6 +735,7 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
   try{
     const s = await api("/api/state");
     if (s.auth) $("#btnLogout").hidden = false;
+    if (s.statuses) STATUSES = s.statuses;
     if (s.service && s.service.name){ $("#brand").textContent = s.service.name; document.title = s.service.name; }
     if (s.history.length) s.history.forEach(m => addMsg(m.role, m.text));
     const last = remembered();
