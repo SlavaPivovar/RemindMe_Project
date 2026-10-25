@@ -7,3 +7,4 @@ __pycache__/
 build/
 /catalog.json
 /catalog.tmp
+/.auth_secret

@@ -168,3 +168,22 @@ def test_catalog_endpoint(tmp_path):
     assert pads["price"] == 72 and pads["parts_price"] == 150 and pads["models"] == "усі"
     filt = next(o for o in data["operations"] if o["code"] == "HVAC-FILTER")
     assert filt["models"] == "Model 3, Model Y" and filt["interval"] == "кожні 2 роки"
+
+
+def test_login_survives_restart_with_same_secret(tmp_path):
+    from tesla_ro.web import load_secret
+
+    secret = load_secret(tmp_path)
+    assert load_secret(tmp_path) == secret and (tmp_path / ".auth_secret").stat().st_mode & 0o777 == 0o600
+    client, _ = make_client([])
+    first = TestClient(create_app(orders_dir=tmp_path / "o", client=client, password="secret-pass", secret=secret))
+    first.post("/login", data={"password": "secret-pass"})
+    cookie = first.cookies.get("tesla_ro_auth")
+
+    restarted = TestClient(create_app(orders_dir=tmp_path / "o", client=client, password="secret-pass", secret=secret))
+    restarted.cookies.set("tesla_ro_auth", cookie)
+    assert restarted.get("/api/state").status_code == 200
+
+    other_password = TestClient(create_app(orders_dir=tmp_path / "o", client=client, password="new-pass-1", secret=secret))
+    other_password.cookies.set("tesla_ro_auth", cookie)
+    assert other_password.get("/api/state").status_code == 401

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 from dataclasses import asdict, dataclass, field
@@ -130,6 +131,13 @@ class RepairOrder:
         return cls(**data)
 
 
+def _parse_date(value: str) -> datetime:
+    try:
+        return datetime.strptime(value, "%d.%m.%Y %H:%M")
+    except ValueError:
+        return datetime.min
+
+
 NUMBER_RE = re.compile(r"^ЗН-\d{4}-\d{5}$")
 
 
@@ -170,8 +178,19 @@ class OrderStore:
 
     def save(self, order: RepairOrder) -> Path:
         path = self._path(order.number)
-        path.write_text(json.dumps(order.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        # Пишемо в тимчасовий файл і атомарно підміняємо: при збої не лишиться напівзаписаного файлу.
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(order.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
         return path
+
+    def history(self, vin: str, exclude: str | None = None) -> list[RepairOrder]:
+        """Попередні замовлення-наряди автомобіля з цим VIN, від найновішого."""
+        vin = vin.strip().upper().replace(" ", "")
+        if not vin:
+            return []
+        found = [o for o in self.list() if o.vehicle.vin == vin and o.number != exclude]
+        return sorted(found, key=lambda o: _parse_date(o.created_at), reverse=True)
 
     def load(self, number: str) -> RepairOrder:
         return RepairOrder.from_dict(json.loads(self._path(number).read_text(encoding="utf-8")))

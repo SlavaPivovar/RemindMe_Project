@@ -55,6 +55,7 @@ def create_app(
     effort: str = "medium",
     password: str | None = None,
     secure_cookies: bool = False,
+    secret: str | None = None,
 ) -> FastAPI:
     """password — пароль для входу; без нього вхід не потрібен (лише для локального запуску).
     catalog_path — файл довідника, який редагується з інтерфейсу; за його відсутності створюється
@@ -69,7 +70,9 @@ def create_app(
     conversations_lock = threading.Lock()
     service_name = catalog.service.get("name") or "Замовлення-наряди Tesla"
     app = FastAPI(title=service_name, docs_url=None, redoc_url=None, openapi_url=None)
-    auth_key = hashlib.sha256(f"{secrets.token_hex(32)}:{password}".encode()).digest()
+    # Ключ підпису входу: зі сталого секрету (вхід переживає перезапуск) або випадковий.
+    # Пароль теж входить у ключ, тож після зміни пароля всі входи стають недійсними.
+    auth_key = hashlib.sha256(f"{secret or secrets.token_hex(32)}:{password}".encode()).digest()
     failures: dict[str, list[float]] = {}
     failures_lock = threading.Lock()
 
@@ -264,19 +267,32 @@ def create_app(
     def update_settings(body: dict):
         return edit(catalog.update_settings, body)
 
+    def matches(o, q: str) -> bool:
+        """Пошук за номером, VIN, держномером, ПІБ або телефоном (телефон — лише за цифрами)."""
+        text = " ".join((o.number, o.vehicle.vin, o.vehicle.plate, o.customer.name, o.vehicle.model)).lower()
+        phone = "".join(ch for ch in o.customer.phone if ch.isdigit())
+        digits = "".join(ch for ch in q if ch.isdigit())
+        if len(digits) >= 3 and all(ch.isdigit() or ch in " +-()" for ch in q):
+            return digits in phone or q.lower() in text  # схоже на телефон: «067 123 45», «+380…»
+        return all(w in text for w in q.lower().split())
+
     @app.get("/api/orders")
-    def orders():
+    def orders(q: str = ""):
+        q = q.strip()
         return [
             {
                 "number": o.number,
                 "created_at": o.created_at,
                 "status": o.status,
                 "customer": o.customer.name,
+                "phone": o.customer.phone,
+                "vin": o.vehicle.vin,
                 "vehicle": " ".join(x for x in (o.vehicle.model, str(o.vehicle.year or ""), o.vehicle.plate) if x),
                 "total": str(o.totals()["total"]),
                 "currency": o.currency,
             }
             for o in store.list()
+            if not q or matches(o, q)
         ]
 
     @app.post("/api/orders/{number}/open")
@@ -314,6 +330,19 @@ def create_app(
     return app
 
 
+def load_secret(data_dir: Path) -> str:
+    """Сталий секрет для підпису входу: створюється один раз і лежить на диску поруч із даними."""
+    path = data_dir / ".auth_secret"
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        value = secrets.token_hex(32)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value, encoding="utf-8")
+        path.chmod(0o600)
+        return value
+
+
 def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
@@ -339,9 +368,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     secure = env("COOKIE_SECURE", "0" if local else "1") == "1"
 
-    catalog_path = args.catalog or Path(args.orders_dir).resolve().parent / "catalog.json"
+    data_dir = Path(args.orders_dir).resolve().parent
+    catalog_path = args.catalog or data_dir / "catalog.json"
     app = create_app(catalog_path, args.orders_dir, model=args.model, effort=args.effort,
-                     password=password, secure_cookies=secure)
+                     password=password, secure_cookies=secure, secret=load_secret(data_dir))
     print(f"Відкрийте в браузері: http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True, forwarded_allow_ips="*")
     return 0

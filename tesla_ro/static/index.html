@@ -110,6 +110,14 @@ dialog td button{padding:3px 8px;font-size:12px}
 .form-err{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:8px 12px;margin-top:10px}
 .form-ok{color:var(--ok);padding:6px 0}
 .hint{color:var(--muted);font-size:12px;margin-top:4px}
+.visits{display:flex;flex-direction:column;gap:8px}
+.visit{border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.visit-head{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}
+.visit-head b{font-weight:600}
+.visit-head .sum{margin-left:auto;white-space:nowrap}
+.visit-head button{padding:2px 8px;font-size:12px}
+.visit ul{margin:4px 0 0;padding-left:18px}
+.rec{color:var(--warn)}
 @media (max-width:900px){
   .tabs{display:flex}
   main{grid-template-columns:minmax(0,1fr);padding:8px 16px 16px}
@@ -168,7 +176,10 @@ dialog td button{padding:3px 8px;font-size:12px}
 
 <dialog id="ordersDlg">
   <div class="dh"><h2>Збережені замовлення-наряди</h2><button id="closeDlg">✕</button></div>
-  <div class="db" id="ordersList"></div>
+  <div class="db">
+    <div class="toolbar"><input id="ordersQuery" type="search" placeholder="Пошук: VIN, телефон, ПІБ, держномер або номер"></div>
+    <div id="ordersList"></div>
+  </div>
 </dialog>
 
 <script>
@@ -206,9 +217,18 @@ function greet(){
   addMsg("assistant", "Вітаю! Опишіть клієнта, автомобіль (VIN, пробіг) і скарги — я підберу роботи та запчастини й оформлю замовлення-наряд.");
 }
 
+// Номер останнього замовлення-наряду в браузері: після перезапуску сервера відкриваємо його знову.
+function remember(number){
+  try{ number ? localStorage.setItem("lastOrder", number) : localStorage.removeItem("lastOrder"); }catch(e){}
+}
+function remembered(){
+  try{ return localStorage.getItem("lastOrder"); }catch(e){ return null; }
+}
+
 function renderOrder(o){
   const box = $("#orderBody");
   if (!o){ box.innerHTML = `<div class="empty">Замовлення-наряд з'явиться тут, щойно ви почнете діалог.</div>`; return; }
+  remember(o.number);
   const c = o.customer, v = o.vehicle, t = o.totals, cur = esc(o.currency);
   const lines = (rows, isLabor) => rows.length ? rows.map((l, i) => `<tr>
       <td>${i + 1}</td><td>${esc(isLabor ? l.code : l.part_no)}</td><td>${esc(l.name)}</td>
@@ -230,6 +250,13 @@ function renderOrder(o){
           <dt>Держ. номер</dt><dd>${dash(v.plate)}</dd><dt>Пробіг</dt><dd>${v.odometer_km != null ? Number(v.odometer_km).toLocaleString("uk-UA") + " км" : "—"}</dd>
           ${v.color ? `<dt>Колір</dt><dd>${esc(v.color)}</dd>` : ""}${v.battery_percent != null ? `<dt>Заряд ВВБ</dt><dd>${esc(v.battery_percent)}%</dd>` : ""}</dl>
     </div>
+    ${o.history && o.history.length ? `<h3>Історія автомобіля · ${o.history.length === 10 ? "останні 10 візитів" : "візитів: " + o.history.length}</h3>
+      <div class="visits">${o.history.map(h => `<div class="visit">
+        <div class="visit-head"><b>${esc(h.date.split(" ")[0])}</b><span class="sub">№ ${esc(h.number)} · ${esc(h.status)}${h.odometer_km != null ? " · " + Number(h.odometer_km).toLocaleString("uk-UA") + " км" : ""}</span>
+          <span class="sum">${num(h.total)} ${esc(h.currency)} <button data-print-visit="${esc(h.number)}" title="Друк">🖨</button></span></div>
+        ${h.works.length ? `<div>${h.works.map(esc).join(", ")}</div>` : ""}
+        ${h.recommendations.length ? `<ul>${h.recommendations.map(r => `<li class="rec">${esc(r)}</li>`).join("")}</ul>` : ""}
+      </div>`).join("")}</div>` : ""}
     <h3>Скарги клієнта</h3>
     ${o.complaints.length ? `<ul class="plain">${o.complaints.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : `<div style="color:var(--muted)">—</div>`}
     ${o.diagnosis ? `<h3>Діагностика</h3><div>${esc(o.diagnosis)}</div>` : ""}
@@ -328,20 +355,23 @@ async function send(text){
   }
 }
 
+let ordersTimer = null;
 async function showOrders(){
+  if (!$("#ordersDlg").open){ $("#ordersQuery").value = ""; $("#ordersDlg").showModal(); }
   $("#ordersList").innerHTML = "Завантаження…";
-  $("#ordersDlg").showModal();
+  const q = $("#ordersQuery").value.trim();
   try{
-    const list = await api("/api/orders");
+    const list = await api("/api/orders" + (q ? "?q=" + encodeURIComponent(q) : ""));
     $("#ordersList").innerHTML = list.length ? `<div class="tbl"><table>
       <tr><th>Номер</th><th>Дата</th><th>Клієнт</th><th>Автомобіль</th><th class="r">Сума</th><th>Статус</th><th></th></tr>
       ${list.map(o => `<tr><td>${esc(o.number)}</td><td>${esc(o.created_at)}</td><td>${dash(o.customer)}</td><td>${dash(o.vehicle)}</td>
         <td class="r">${num(o.total)} ${esc(o.currency)}</td><td>${esc(o.status)}</td>
         <td class="r"><button data-open="${esc(o.number)}">Відкрити</button> <button data-print="${esc(o.number)}">🖨</button></td></tr>`).join("")}
-      </table></div>` : `<div class="empty">Збережених замовлень-нарядів поки немає.</div>`;
+      </table></div>` : `<div class="empty">${q ? "Нічого не знайдено." : "Збережених замовлень-нарядів поки немає."}</div>`;
   }catch(e){ $("#ordersList").textContent = e.message; }
 }
 
+$("#ordersQuery").oninput = () => { clearTimeout(ordersTimer); ordersTimer = setTimeout(showOrders, 250); };
 $("#ordersList").addEventListener("click", async e => {
   const open = e.target.dataset.open, print = e.target.dataset.print;
   if (print) window.open("/print/" + encodeURIComponent(print), "_blank");
@@ -354,6 +384,10 @@ $("#ordersList").addEventListener("click", async e => {
   }
 });
 
+$("#orderBody").addEventListener("click", e => {
+  const n = e.target.dataset.printVisit;
+  if (n) window.open("/print/" + encodeURIComponent(n), "_blank");
+});
 $("#mic").onclick = () => recognizer ? stopVoice() : startVoice();
 $("#composer").addEventListener("submit", e => { e.preventDefault(); send($("#input").value); });
 $("#input").addEventListener("keydown", e => {
@@ -581,6 +615,7 @@ $("#catalogList").addEventListener("click", e => {
 $("#btnNew").onclick = async () => {
   if (busy) return;
   await api("/api/reset", {method: "POST"});
+  remember(null);
   $("#log").innerHTML = ""; greet(); renderOrder(null);
 };
 document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
@@ -593,7 +628,18 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
     const s = await api("/api/state");
     if (s.auth) $("#btnLogout").hidden = false;
     if (s.service && s.service.name){ $("#brand").textContent = s.service.name; document.title = s.service.name; }
-    if (s.history.length) s.history.forEach(m => addMsg(m.role, m.text)); else greet();
+    if (s.history.length) s.history.forEach(m => addMsg(m.role, m.text));
+    const last = remembered();
+    if (!s.order && last){
+      // Сервер перезапускався і забув розмову — відкриваємо автоматично збережену чернетку.
+      try{
+        const data = await api(`/api/orders/${encodeURIComponent(last)}/open`, {method: "POST"});
+        addMsg("assistant", `Відновлено замовлення-наряд № ${last}. Попередню розмову не збережено — продовжуйте з того місця, де зупинилися.`);
+        renderOrder(data.order);
+        return;
+      }catch(e){ remember(null); }
+    }
+    if (!s.history.length) greet();
     renderOrder(s.order);
   }catch(e){ greet(); renderOrder(null); addMsg("error", e.message); }
 })();

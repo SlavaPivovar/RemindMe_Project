@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import functools
 import json
+import logging
 from pathlib import Path
 
 from anthropic.lib.tools import ToolError
@@ -17,6 +19,17 @@ from .render import render_html
 from .vin import decode_vin
 
 DRAFT = "чернетка"
+log = logging.getLogger(__name__)
+
+
+def autosave(method):
+    """Після успішної зміни замовлення зберегти його на диск (чернетку не втратимо при перезапуску)."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        result = method(self, *args, **kwargs)
+        self._autosave()
+        return result
+    return wrapper
 
 
 def _json(data) -> str:
@@ -38,6 +51,7 @@ class OrderSession:
     def tool_methods(self) -> list:
         return [
             self.new_order, self.open_order, self.set_customer, self.set_vehicle, self.decode_vin,
+            self.get_vehicle_history,
             self.add_complaint, self.set_diagnosis, self.add_recommendation,
             self.search_operations, self.get_maintenance_schedule, self.search_parts, self.add_operation, self.add_custom_labor,
             self.add_part, self.add_custom_part, self.set_line, self.set_discount, self.remove_line,
@@ -70,6 +84,7 @@ class OrderSession:
 
     # --- клієнт і автомобіль ---
 
+    @autosave
     def set_customer(self, name: str, phone: str = "", email: str = "") -> str:
         """Вказати дані замовника.
 
@@ -90,6 +105,7 @@ class OrderSession:
         info = decode_vin(vin)
         return _json(info.__dict__)
 
+    @autosave
     def set_vehicle(
         self,
         vin: str,
@@ -127,10 +143,39 @@ class OrderSession:
             odometer_km=odometer_km,
             battery_percent=battery_percent,
         )
-        return _json({"vehicle": self._order.vehicle.__dict__, "vin_warnings": info.warnings})
+        previous = self.store.history(info.vin, exclude=self._order.number)
+        return _json({"vehicle": self._order.vehicle.__dict__, "vin_warnings": info.warnings,
+                      "previous_visits_count": len(previous),
+                      "previous_visits": [self._visit_info(o) for o in previous[:5]]})
+
+    def get_vehicle_history(self, vin: str = "") -> str:
+        """Історія автомобіля: попередні замовлення-наряди за VIN (дати, пробіг, скарги, роботи,
+        рекомендації, дані клієнта), від найновішого.
+
+        Args:
+            vin: VIN; якщо не вказано — береться VIN поточного замовлення.
+        """
+        vin = vin or (self.order.vehicle.vin if self.order else "")
+        if not vin:
+            raise ToolError("Вкажіть VIN або спершу задайте автомобіль у замовленні")
+        exclude = self.order.number if self.order else None
+        return _json([self._visit_info(o) for o in self.store.history(vin, exclude=exclude)[:20]])
+
+    @staticmethod
+    def _visit_info(o: RepairOrder) -> dict:
+        return {
+            "number": o.number, "date": o.created_at, "status": o.status,
+            "odometer_km": o.vehicle.odometer_km,
+            "customer": {"name": o.customer.name, "phone": o.customer.phone, "email": o.customer.email},
+            "complaints": o.complaints, "diagnosis": o.diagnosis,
+            "works": [line.name for line in o.labor], "parts": [line.name for line in o.parts],
+            "recommendations": o.recommendations,
+            "total": str(o.totals()["total"]), "currency": o.currency,
+        }
 
     # --- опис проблеми ---
 
+    @autosave
     def add_complaint(self, text: str) -> str:
         """Додати скаргу / причину звернення клієнта (словами клієнта, коротко).
 
@@ -140,6 +185,7 @@ class OrderSession:
         self._order.complaints.append(text.strip())
         return f"Скарг: {len(self._order.complaints)}"
 
+    @autosave
     def set_diagnosis(self, text: str) -> str:
         """Записати результати діагностики / висновок майстра.
 
@@ -149,6 +195,7 @@ class OrderSession:
         self._order.diagnosis = text.strip()
         return "ok"
 
+    @autosave
     def add_recommendation(self, text: str) -> str:
         """Додати рекомендацію клієнту (роботи на майбутнє, що не входять у поточне замовлення).
 
@@ -193,6 +240,7 @@ class OrderSession:
 
     # --- рядки замовлення ---
 
+    @autosave
     def add_operation(
         self, code: str, include_parts: bool = True, qty: float = 1, price: float | None = None
     ) -> str:
@@ -223,6 +271,7 @@ class OrderSession:
                 added_parts.append(part_no)
         return _json({"added_labor": op.code, "added_parts": added_parts, "totals": self._totals()})
 
+    @autosave
     def add_custom_labor(self, name: str, price: float, qty: float = 1, code: str = "CUSTOM") -> str:
         """Додати роботу, якої немає в довіднику (ціну називає майстер).
 
@@ -237,6 +286,7 @@ class OrderSession:
         self._order.labor.append(LaborLine(code=code, name=name, price=price, qty=qty))
         return _json({"totals": self._totals()})
 
+    @autosave
     def add_part(self, part_no: str, qty: float = 1) -> str:
         """Додати запчастину з довідника за артикулом.
 
@@ -247,6 +297,7 @@ class OrderSession:
         self._add_part_line(part_no, qty)
         return _json({"totals": self._totals()})
 
+    @autosave
     def add_custom_part(self, name: str, qty: float, price: float, part_no: str = "", unit: str = "шт") -> str:
         """Додати запчастину, якої немає в довіднику (ціну називає майстер).
 
@@ -281,6 +332,7 @@ class OrderSession:
             return self._order.parts
         raise ToolError("kind має бути 'labor' або 'parts'")
 
+    @autosave
     def set_discount(self, kind: str, line_number: int, percent: float) -> str:
         """Встановити знижку на рядок замовлення. line_number = 0 — на всі рядки цього виду.
 
@@ -297,6 +349,7 @@ class OrderSession:
             line.discount_percent = percent
         return _json({"totals": self._totals()})
 
+    @autosave
     def set_line(self, kind: str, line_number: int, price: float | None = None, qty: float | None = None) -> str:
         """Змінити ціну за одиницю та/або кількість рядка в поточному замовленні (довідник не змінюється).
         Використовуй, лише коли майстер прямо просить іншу ціну чи кількість.
@@ -318,6 +371,7 @@ class OrderSession:
             line.qty = qty
         return _json({"line": line.name, "price": line.price, "qty": line.qty, "totals": self._totals()})
 
+    @autosave
     def remove_line(self, kind: str, line_number: int) -> str:
         """Видалити рядок із замовлення.
 
@@ -341,12 +395,27 @@ class OrderSession:
     def _totals(self) -> dict:
         return {k: str(v) for k, v in self._order.totals().items()}
 
+    def _autosave(self) -> None:
+        order = self.order
+        if order is None:
+            return
+        has_content = any((order.customer.name, order.customer.phone, order.vehicle.vin, order.complaints,
+                           order.diagnosis, order.recommendations, order.labor, order.parts))
+        if not has_content:
+            return  # порожні чернетки не засмічують список збережених
+        try:
+            self.store.save(order)
+        except OSError:
+            log.exception("Не вдалося автоматично зберегти %s", order.number)
+
     def snapshot(self) -> dict | None:
         """Стан замовлення для інтерфейсу (не інструмент моделі)."""
         if self.order is None:
             return None
         data = self.order.to_dict()
         data["missing_fields"] = self.order.missing_fields()
+        data["history"] = [self._visit_info(o) for o in self.store.history(self.order.vehicle.vin,
+                                                                           exclude=self.order.number)[:10]]
         return data
 
     def get_order(self) -> str:
