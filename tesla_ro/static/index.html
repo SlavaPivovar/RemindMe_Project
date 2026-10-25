@@ -132,6 +132,9 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .st-4{background:rgba(71,85,105,.16);color:#334155}
 .st-5{background:rgba(220,38,38,.12);color:#b91c1c}
 .status-log{font-size:12px;color:var(--muted);margin:-6px 0 12px}
+.line-add{display:flex;gap:8px;margin-top:8px}
+.line-add button{font-size:13px;padding:5px 12px}
+#orderBody td.acts button{padding:2px 7px;font-size:12px}
 .ai-cost{font-size:12px;color:var(--muted);margin:-6px 0 12px}
 .usage{border-top:1px solid var(--line);margin-top:8px;padding-top:4px}
 .usage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0 14px}
@@ -153,8 +156,10 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
   main > .card{display:none}
   main > .card.show{display:flex}
   .info{grid-template-columns:1fr}
-  #catalogList .hide-m{display:none}
+  #catalogList .hide-m,#orderBody .hide-m{display:none}
   #catalogList .show-m{display:inline}
+  #orderBody .show-m{display:block}
+  #orderBody td.acts{white-space:nowrap}
   #catalogList th,#catalogList td{padding:6px 4px}
   .form{grid-template-columns:1fr;gap:4px}
   #send{width:48px;padding:0;display:flex;align-items:center;justify-content:center;flex:none}
@@ -209,6 +214,11 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
   </div>
 </dialog>
 <datalist id="catCategories"></datalist>
+
+<dialog id="lineDlg">
+  <div class="dh"><h2 id="lineTitle"></h2><button id="closeLine">✕</button></div>
+  <div class="db" id="lineBody"></div>
+</dialog>
 
 <dialog id="ordersDlg">
   <div class="dh"><h2>Збережені замовлення-наряди</h2><button id="closeDlg">✕</button></div>
@@ -266,18 +276,27 @@ function remembered(){
   try{ return localStorage.getItem("lastOrder"); }catch(e){ return null; }
 }
 
+let currentOrder = null;
 function renderOrder(o){
   const box = $("#orderBody");
+  if (!o) currentOrder = null;
   if (!o){ box.innerHTML = `<div class="empty">Замовлення-наряд з'явиться тут, щойно ви почнете діалог.</div>`; return; }
   remember(o.number);
+  currentOrder = o;
   const c = o.customer, v = o.vehicle, t = o.totals, cur = esc(o.currency);
-  const lines = (rows, isLabor) => rows.length ? rows.map((l, i) => `<tr>
-      <td>${i + 1}</td><td>${esc(isLabor ? l.code : l.part_no)}</td><td>${esc(l.name)}</td>
-      <td class="r">${String(l.qty).replace(".", ",")}${isLabor ? "" : " " + esc(l.unit)}</td>
-      <td class="r">${num(l.price)}</td>
-      <td class="r">${l.discount_percent ? esc(l.discount_percent) + "%" : ""}</td>
-      <td class="r">${num(l.qty * l.price * (1 - l.discount_percent / 100))}</td></tr>`).join("")
-    : `<tr><td colspan="7" style="color:var(--muted)">—</td></tr>`;
+  const lines = (rows, isLabor) => rows.length ? rows.map((l, i) => {
+    const qty = String(l.qty).replace(".", ",") + (isLabor ? "" : " " + esc(l.unit));
+    const code = esc(isLabor ? l.code : l.part_no);
+    return `<tr>
+      <td class="hide-m">${i + 1}</td><td class="hide-m">${code}</td>
+      <td>${esc(l.name)}<div class="sub show-m">${code ? code + " · " : ""}${qty} × ${num(l.price)}${l.discount_percent ? " · −" + esc(l.discount_percent) + "%" : ""}</div></td>
+      <td class="r hide-m">${qty}</td>
+      <td class="r hide-m">${num(l.price)}</td>
+      <td class="r hide-m">${l.discount_percent ? esc(l.discount_percent) + "%" : ""}</td>
+      <td class="r">${num(l.qty * l.price * (1 - l.discount_percent / 100))}</td>
+      <td class="r acts"><button data-line-edit="${isLabor ? "labor" : "parts"}:${i + 1}" title="Змінити">✎</button> <button data-line-del="${isLabor ? "labor" : "parts"}:${i + 1}" title="Видалити">✕</button></td></tr>`;
+  }).join("")
+    : `<tr><td colspan="8" style="color:var(--muted)">—</td></tr>`;
   const vat = o.prices_include_vat ? `у т.ч. ПДВ ${esc(o.vat_percent)}%` : `ПДВ ${esc(o.vat_percent)}%`;
   box.innerHTML = `
     <div class="ohead">
@@ -307,9 +326,11 @@ function renderOrder(o){
     ${o.complaints.length ? `<ul class="plain">${o.complaints.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : `<div style="color:var(--muted)">—</div>`}
     ${o.diagnosis ? `<h3>Діагностика</h3><div>${esc(o.diagnosis)}</div>` : ""}
     <h3>Роботи</h3>
-    <div class="tbl"><table><tr><th>№</th><th>Код</th><th>Найменування</th><th class="r">Кількість</th><th class="r">Ціна</th><th class="r">Знижка</th><th class="r">Сума</th></tr>${lines(o.labor, true)}</table></div>
+    <div class="tbl"><table><tr><th class="hide-m">№</th><th class="hide-m">Код</th><th>Найменування</th><th class="r hide-m">Кількість</th><th class="r hide-m">Ціна</th><th class="r hide-m">Знижка</th><th class="r">Сума</th><th></th></tr>${lines(o.labor, true)}</table></div>
+    <div class="line-add"><button data-add-line="labor">＋ Додати роботу</button></div>
     <h3>Запчастини та матеріали</h3>
-    <div class="tbl"><table><tr><th>№</th><th>Артикул</th><th>Найменування</th><th class="r">Кількість</th><th class="r">Ціна</th><th class="r">Знижка</th><th class="r">Сума</th></tr>${lines(o.parts, false)}</table></div>
+    <div class="tbl"><table><tr><th class="hide-m">№</th><th class="hide-m">Артикул</th><th>Найменування</th><th class="r hide-m">Кількість</th><th class="r hide-m">Ціна</th><th class="r hide-m">Знижка</th><th class="r">Сума</th><th></th></tr>${lines(o.parts, false)}</table></div>
+    <div class="line-add"><button data-add-line="parts">＋ Додати запчастину</button></div>
     <div class="totals">
       <div><span>Роботи</span><span>${num(t.labor)} ${cur}</span></div>
       <div><span>Запчастини</span><span>${num(t.parts)} ${cur}</span></div>
@@ -451,9 +472,136 @@ $("#ordersList").addEventListener("click", async e => {
 });
 
 $("#orderBody").addEventListener("click", e => {
-  const n = e.target.dataset.printVisit;
-  if (n) window.open("/print/" + encodeURIComponent(n), "_blank");
+  const d = e.target.dataset;
+  if (d.printVisit) window.open("/print/" + encodeURIComponent(d.printVisit), "_blank");
+  if (d.addLine) addLineDialog(d.addLine);
+  if (d.lineEdit) editLineDialog(...d.lineEdit.split(":"));
+  if (d.lineDel) deleteLine(...d.lineDel.split(":"));
 });
+
+// ---------- Ручне редагування рядків замовлення-наряду ----------
+function okToEdit(){
+  const s = currentOrder && currentOrder.status;
+  return !["видано", "скасовано"].includes(s) || confirm(`Замовлення-наряд має статус «${s}». Усе одно змінити?`);
+}
+
+async function orderEdit(method, url, body){
+  try{
+    const data = await api(url, {method, body: body ? JSON.stringify(body) : undefined});
+    renderOrder(data.order);
+    return true;
+  }catch(e){
+    const box = $("#lineErr");
+    if (box && $("#lineDlg").open){ box.hidden = false; box.textContent = e.message; }
+    else addMsg("error", e.message);
+    return false;
+  }
+}
+
+function lineOf(kind, n){ return (kind === "labor" ? currentOrder.labor : currentOrder.parts)[n - 1]; }
+
+async function deleteLine(kind, n){
+  const l = lineOf(kind, +n);
+  if (!l || !okToEdit() || !confirm(`Видалити «${l.name}»?`)) return;
+  await orderEdit("DELETE", `/api/order/${kind}/${n}`);
+}
+
+function editLineDialog(kind, n){
+  const l = lineOf(kind, +n);
+  if (!l || !okToEdit()) return;
+  $("#lineTitle").textContent = l.name;
+  $("#lineBody").innerHTML = `<form class="form" id="lineForm" autocomplete="off">
+      <label for="lQty">Кількість</label><input id="lQty" inputmode="decimal" value="${fmtNum(l.qty)}">
+      <label for="lPrice">Ціна за од., ${esc(currentOrder.currency)}</label><input id="lPrice" inputmode="decimal" value="${fmtNum(l.price)}">
+      <label for="lDisc">Знижка, %</label><input id="lDisc" inputmode="decimal" value="${fmtNum(l.discount_percent)}">
+      <span></span><div class="hint">Змінюється лише цей замовлення-наряд, довідник не змінюється.</div>
+      <span></span><div><div class="form-err" id="lineErr" hidden></div>
+        <div class="form-actions"><button class="primary" type="submit">Зберегти</button><button type="button" id="lineCancel">Скасувати</button></div></div>
+    </form>`;
+  $("#lineDlg").showModal();
+  $("#lineCancel").onclick = () => $("#lineDlg").close();
+  $("#lineForm").onsubmit = async e => {
+    e.preventDefault();
+    const n2 = v => Number(String(v).replace(",", ".").trim());
+    const body = {qty: n2($("#lQty").value), price: n2($("#lPrice").value), discount_percent: n2($("#lDisc").value)};
+    if (Object.values(body).some(v => !isFinite(v))){ $("#lineErr").hidden = false; $("#lineErr").textContent = "Введіть числа"; return; }
+    if (await orderEdit("PATCH", `/api/order/${kind}/${n}`, body)) $("#lineDlg").close();
+  };
+  $("#lQty").focus();
+}
+
+async function addLineDialog(kind){
+  if (!currentOrder || !okToEdit()) return;
+  const labor = kind === "labor";
+  $("#lineTitle").textContent = labor ? "Додати роботу" : "Додати запчастину";
+  $("#lineBody").innerHTML = `<div class="seg" id="addTabs"><button data-mode="catalog" class="on">З довідника</button><button data-mode="custom">Своя позиція</button></div>
+    <div id="addView">Завантаження…</div><div class="form-err" id="lineErr" hidden></div>`;
+  $("#lineDlg").showModal();
+  try{ setCatalog(await api("/api/catalog")); }catch(e){ $("#addView").textContent = e.message; return; }
+  const model = currentOrder.vehicle.model_code;
+  const items = labor
+    ? catalogData.operations.filter(o => !model || o.model_codes.includes("*") || o.model_codes.includes(model))
+    : catalogData.parts;
+  const cur = esc(catalogData.currency);
+  const showCatalogList = () => {
+    $("#addView").innerHTML = `<div class="toolbar"><input id="addQuery" type="search" placeholder="Пошук…">
+        <label class="sub">Кількість <input id="addQty" inputmode="decimal" value="1" style="width:60px;min-width:0"></label>
+        ${labor ? `<label class="sub"><input type="checkbox" id="addParts" checked> з типовими запчастинами</label>` : ""}</div>
+      <div id="addList"></div>`;
+    const draw = () => {
+      // Як у пошуку помічника: слово порівнюється за першими 5 літерами («колодок» знайде «колодки»).
+      const q = $("#addQuery").value.trim().toLowerCase().split(/\s+/).filter(Boolean).map(w => w.slice(0, 5));
+      const found = items.filter(it => q.every(w => `${labor ? it.code : it.part_no} ${it.name} ${it.category || ""}`.toLowerCase().includes(w)));
+      $("#addList").innerHTML = found.length ? `<div class="tbl"><table>${found.map(it => `<tr>
+          <td>${esc(it.name)}<div class="sub">${esc(labor ? it.code : it.part_no)}${labor && it.parts.length ? " · " + it.parts.map(p => esc(p.name)).join(", ") : ""}</div></td>
+          <td class="r">${num(it.price)} ${cur}</td>
+          <td class="r"><button data-pick="${esc(labor ? it.code : it.part_no)}">＋</button></td></tr>`).join("")}</table></div>`
+        : `<div class="empty">Нічого не знайдено. Додайте як «Своя позиція».</div>`;
+    };
+    $("#addQuery").oninput = draw;
+    draw();
+    $("#addQuery").focus();
+    $("#addList").onclick = async e => {
+      const id = e.target.dataset.pick;
+      if (!id) return;
+      const qty = Number($("#addQty").value.replace(",", "."));
+      if (!(qty > 0)){ $("#lineErr").hidden = false; $("#lineErr").textContent = "Кількість має бути більшою за нуль"; return; }
+      const body = labor ? {code: id, qty, include_parts: $("#addParts").checked} : {part_no: id, qty};
+      if (await orderEdit("POST", `/api/order/${kind}`, body)) $("#lineDlg").close();
+    };
+  };
+  const showCustomForm = () => {
+    $("#addView").innerHTML = `<form class="form" id="customForm" autocomplete="off">
+        <label for="cName">Назва</label><input id="cName">
+        ${labor ? "" : `<label for="cNo">Артикул</label><input id="cNo" placeholder="необов'язково">`}
+        <label for="cPrice">Ціна за од., ${cur}</label><input id="cPrice" inputmode="decimal">
+        <label for="cQty">Кількість</label><input id="cQty" inputmode="decimal" value="1">
+        ${labor ? "" : `<label for="cUnit">Одиниця</label><input id="cUnit" value="шт">`}
+        <span></span><div class="hint">Позиція додається лише в цей замовлення-наряд. Щоб вона була в довіднику — додайте її в «📚 Довідник».</div>
+        <span></span><div class="form-actions"><button class="primary" type="submit">Додати</button></div>
+      </form>`;
+    $("#cName").focus();
+    $("#customForm").onsubmit = async e => {
+      e.preventDefault();
+      const n2 = v => Number(String(v).replace(",", ".").trim());
+      const body = {name: $("#cName").value, price: n2($("#cPrice").value), qty: n2($("#cQty").value)};
+      if (!labor){ body.part_no = $("#cNo").value; body.unit = $("#cUnit").value; }
+      if (!body.name.trim() || !isFinite(body.price) || $("#cPrice").value.trim() === ""){
+        $("#lineErr").hidden = false; $("#lineErr").textContent = "Вкажіть назву та ціну"; return;
+      }
+      if (await orderEdit("POST", `/api/order/${kind}`, body)) $("#lineDlg").close();
+    };
+  };
+  $("#addTabs").onclick = e => {
+    const mode = e.target.dataset.mode;
+    if (!mode) return;
+    document.querySelectorAll("#addTabs button").forEach(b => b.classList.toggle("on", b === e.target));
+    $("#lineErr").hidden = true;
+    mode === "catalog" ? showCatalogList() : showCustomForm();
+  };
+  showCatalogList();
+}
+$("#closeLine").onclick = () => $("#lineDlg").close();
 $("#mic").onclick = () => recognizer ? stopVoice() : startVoice();
 
 // ---------- Фото VIN / одометра ----------

@@ -16,15 +16,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import anthropic
+from anthropic.lib.tools import ToolError
 from fastapi import Cookie, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from .assistant import MODEL, RepairOrderAssistant
 from .catalog import DEFAULT_CATALOG, MODEL_CODES, Catalog, CatalogError
-from .order import OrderStore
+from .order import STATUSES, OrderStore, StatusError
 from .render import render_html
-from .order import STATUSES, StatusError
 from .tools import OrderSession
 from .usage import UsageLedger
 from .usage import add as add_usage
@@ -48,6 +48,7 @@ class Conversation:
     lock: threading.Lock = field(default_factory=threading.Lock)
     last_used: float = field(default_factory=time.monotonic)
     pending_usage: dict = field(default_factory=empty_usage)  # витрати до появи замовлення-наряду
+    manual_changes: list[str] = field(default_factory=list)  # правки з панелі, про які ще не знає помічник
 
 
 class ChatIn(BaseModel):
@@ -60,6 +61,26 @@ class PhotoIn(BaseModel):
 
 class StatusIn(BaseModel):
     status: str
+
+
+class LineIn(BaseModel):
+    """Новий рядок: з довідника (code / part_no) або власний (name + price)."""
+    code: str = ""
+    part_no: str = ""
+    name: str = ""
+    price: float | None = None
+    qty: float = 1
+    unit: str = "шт"
+    include_parts: bool = True
+
+
+class LineEditIn(BaseModel):
+    qty: float | None = None
+    price: float | None = None
+    discount_percent: float | None = None
+
+
+MANUAL_NOTE = "[Зміни, внесені майстром вручну в панелі замовлення-наряду: "
 
 
 @contextlib.contextmanager
@@ -206,7 +227,10 @@ def create_app(
         history = []
         for m in conv.assistant.messages:
             if isinstance(m["content"], str):
-                history.append({"role": "user", "text": m["content"]})
+                text = m["content"]
+                if text.startswith(MANUAL_NOTE):
+                    text = text.split("]\n", 1)[-1]
+                history.append({"role": "user", "text": text})
             elif m["role"] == "assistant":
                 text = "\n".join(b.text for b in m["content"] if getattr(b, "type", None) == "text").strip()
                 if text:
@@ -223,9 +247,13 @@ def create_app(
         conv = conversation(tesla_ro_sid, response)
         if not conv.lock.acquire(blocking=False):
             raise HTTPException(409, "Помічник ще відповідає на попереднє повідомлення")
+        if conv.manual_changes:
+            # Помічник має знати про ручні правки, інакше його підсумки розійдуться із замовленням.
+            text = MANUAL_NOTE + "; ".join(conv.manual_changes) + "]\n" + text
         try:
             with api_errors():
                 reply = conv.assistant.send(text)
+            conv.manual_changes.clear()
         finally:
             charge(conv, "chat", conv.assistant.last_turn_usage)
             conv.lock.release()
@@ -255,6 +283,83 @@ def create_app(
         summary["avg_per_order"] = round(sum(costs) / len(costs), 4) if costs else 0
         return summary
 
+    def edit_order(conv: Conversation, action, note: str):
+        """Виконати ручну правку поточного замовлення (з автозбереженням) і запам'ятати її для помічника."""
+        if conv.session.order is None:
+            raise HTTPException(404, "Замовлення-наряд ще не створено")
+        if not conv.lock.acquire(blocking=False):
+            raise HTTPException(409, "Помічник ще відповідає — спробуйте за мить")
+        try:
+            try:
+                action()
+            except ToolError as exc:
+                raise HTTPException(400, str(exc)) from None
+            conv.manual_changes.append(note)
+        finally:
+            conv.lock.release()
+        return {"order": conv.session.snapshot()}
+
+    def line_name(conv: Conversation, kind: str, number: int) -> str:
+        lines = conv.session.order.labor if kind == "labor" else conv.session.order.parts
+        return lines[number - 1].name if 1 <= number <= len(lines) else f"рядок {number}"
+
+    @app.post("/api/order/labor")
+    def add_labor(body: LineIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+        s = conv.session
+        if body.code:
+            op = catalog.operations.get(body.code)
+            return edit_order(conv, lambda: s.add_operation(body.code, body.include_parts, body.qty, body.price),
+                              f"додав роботу «{op.name if op else body.code}» × {body.qty:g}")
+        name = body.name.strip()
+        if not name or body.price is None:
+            raise HTTPException(400, "Вкажіть назву та ціну роботи")
+        return edit_order(conv, lambda: s.add_custom_labor(name, body.price, body.qty),
+                          f"додав роботу «{name}» за {body.price:g} × {body.qty:g}")
+
+    @app.post("/api/order/parts")
+    def add_part(body: LineIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+        s = conv.session
+        if body.part_no and body.price is None and not body.name:
+            part = catalog.parts.get(body.part_no)
+            return edit_order(conv, lambda: s.add_part(body.part_no, body.qty),
+                              f"додав запчастину «{part.name if part else body.part_no}» × {body.qty:g}")
+        name = body.name.strip()
+        if not name or body.price is None:
+            raise HTTPException(400, "Вкажіть назву та ціну запчастини")
+        return edit_order(conv, lambda: s.add_custom_part(name, body.qty, body.price, body.part_no.strip(),
+                                                          body.unit.strip() or "шт"),
+                          f"додав запчастину «{name}» за {body.price:g} × {body.qty:g}")
+
+    @app.patch("/api/order/{kind}/{number}")
+    def update_line(kind: str, number: int, body: LineEditIn, response: Response,
+                    tesla_ro_sid: str | None = Cookie(None)):
+        if kind not in ("labor", "parts"):
+            raise HTTPException(404, "Невідомий тип рядка")
+        conv = conversation(tesla_ro_sid, response)
+        s = conv.session
+
+        def action():
+            if body.price is not None or body.qty is not None:
+                s.set_line(kind, number, body.price, body.qty)
+            if body.discount_percent is not None:
+                s.set_discount(kind, number, body.discount_percent)
+
+        name = line_name(conv, kind, number) if s.order else ""
+        changes = ", ".join(f"{label} {value:g}" for label, value in
+                            (("кількість", body.qty), ("ціна", body.price), ("знижка %", body.discount_percent))
+                            if value is not None)
+        return edit_order(conv, action, f"змінив «{name}»: {changes}")
+
+    @app.delete("/api/order/{kind}/{number}")
+    def delete_line(kind: str, number: int, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        if kind not in ("labor", "parts"):
+            raise HTTPException(404, "Невідомий тип рядка")
+        conv = conversation(tesla_ro_sid, response)
+        name = line_name(conv, kind, number) if conv.session.order else ""
+        return edit_order(conv, lambda: conv.session.remove_line(kind, number), f"видалив «{name}»")
+
     @app.post("/api/order/status")
     def order_status(body: StatusIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
         conv = conversation(tesla_ro_sid, response)
@@ -281,6 +386,7 @@ def create_app(
         with conversations_lock:
             fresh = new_conversation()
             conv.session, conv.assistant = fresh.session, fresh.assistant
+            conv.manual_changes.clear()
         return {"order": None}
 
     model_names = {"MODEL_S": "Model S", "MODEL_3": "Model 3", "MODEL_X": "Model X", "MODEL_Y": "Model Y",
@@ -391,6 +497,7 @@ def create_app(
         with conversations_lock:
             fresh = new_conversation()
             conv.session, conv.assistant = fresh.session, fresh.assistant
+            conv.manual_changes.clear()
         conv.session.order = order
         return {"order": conv.session.snapshot()}
 
