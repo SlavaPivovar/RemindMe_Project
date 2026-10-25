@@ -11,6 +11,10 @@ services:
         sync: false          # Render попросить ввести значення під час створення
       - key: APP_PASSWORD
         sync: false
+      - key: TELEGRAM_BOT_TOKEN   # необов'язково: токен бота від @BotFather
+        sync: false
+      - key: TELEGRAM_CHAT_ID     # необов'язково: id робочої групи (бот підкаже командою /chatid)
+        sync: false
     disk:
       name: orders
       mountPath: /data

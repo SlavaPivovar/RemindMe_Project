@@ -145,6 +145,16 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .inline-add button{padding:4px 12px}
 .empty .primary{margin-top:14px}
 .form textarea{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);min-height:110px;resize:vertical}
+.internal{margin-top:20px;border:1px dashed var(--line);border-radius:12px;padding:4px 14px 14px;background:var(--bg)}
+.internal h3{margin-top:12px}
+.comments{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.comment{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.comment .meta{font-size:12px;color:var(--muted);margin-bottom:2px}
+.comment .meta b{color:var(--text);font-weight:600}
+.comment-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px}
+.comment-form input,.comment-form textarea{font:inherit;font-size:14px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);min-width:0}
+.comment-form textarea{grid-column:1 / -1;min-height:64px;resize:vertical}
+.cc{font-size:11px;color:var(--muted);white-space:nowrap}
 .form-warn{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:8px 12px;margin-top:10px}
 button.danger-lite{color:var(--accent)}
 .line-add button{font-size:13px;padding:5px 12px}
@@ -291,7 +301,52 @@ function remembered(){
   try{ return localStorage.getItem("lastOrder"); }catch(e){ return null; }
 }
 
-let currentOrder = null;
+let currentOrder = null, TELEGRAM = false;
+
+// ---------- Внутрішні коментарі (не друкуються) ----------
+function authorName(){ try{ return localStorage.getItem("author") || ""; }catch(e){ return ""; } }
+function setAuthorName(v){ try{ localStorage.setItem("author", v); }catch(e){} }
+
+function renderComments(list){
+  const box = $("#internalBox");
+  if (!box || !currentOrder) return;
+  const typing = document.activeElement && document.activeElement.id === "cText" ? $("#cText").value : "";
+  box.dataset.count = list.length;
+  box.innerHTML = `<h3>💬 Внутрішні коментарі${list.length ? " · " + list.length : ""}</h3>
+    <div class="sub" style="margin:-4px 0 10px">Лише для співробітників — у друковану форму не потрапляють.${TELEGRAM ? " Також з'являються в Telegram-групі, а відповіді там — тут." : ""}</div>
+    <div class="comments">${list.map(c => `<div class="comment">
+        <div class="meta"><b>${esc(c.author)}</b> · ${esc(c.at)} · ${c.source === "telegram" ? "📱 Telegram" : "🖥 сайт"}</div>
+        <div>${esc(c.text).replace(/\n/g, "<br>")}</div></div>`).join("") || `<div class="sub">Коментарів ще немає.</div>`}</div>
+    <form class="comment-form" id="commentForm">
+      <textarea id="cText" placeholder="Що зроблено, що помітили, що лишилось…" aria-label="Коментар">${esc(typing)}</textarea>
+      <input id="cAuthor" placeholder="Ваше ім'я" value="${esc(authorName())}" aria-label="Ваше ім'я">
+      <button class="primary">Додати</button>
+    </form>`;
+  if (typing){ $("#cText").focus(); }
+  $("#commentForm").onsubmit = async e => {
+    e.preventDefault();
+    const text = $("#cText").value.trim(), author = $("#cAuthor").value.trim();
+    if (!text) return;
+    if (!author){ $("#cAuthor").focus(); $("#cAuthor").placeholder = "Вкажіть ім'я"; return; }
+    setAuthorName(author);
+    try{
+      const list2 = await api(`/api/orders/${encodeURIComponent(currentOrder.number)}/comments`,
+                              {method: "POST", body: JSON.stringify({text, author})});
+      $("#cText").value = "";
+      document.activeElement.blur();
+      renderComments(list2);
+    }catch(err){ alert(err.message); }
+  };
+}
+
+// Коментарі з Telegram з'являються самі: раз на 20 секунд перевіряємо відкрите замовлення.
+setInterval(async () => {
+  if (!currentOrder || document.hidden || !$("#internalBox")) return;
+  try{
+    const list = await api(`/api/orders/${encodeURIComponent(currentOrder.number)}/comments`);
+    if (String(list.length) !== $("#internalBox").dataset.count) renderComments(list);
+  }catch(e){}
+}, 20000);
 const textList = (items, kind) => items.length
   ? `<ul class="plain-edit">${items.map((x, i) => `<li><span>${esc(x)}</span><button data-text-del="${kind}:${i + 1}" title="Видалити">✕</button></li>`).join("")}</ul>`
   : `<div class="sub">—</div>`;
@@ -365,7 +420,9 @@ function renderOrder(o){
     </div>
     <h3>Рекомендації</h3>
     ${textList(o.recommendations, "recommendations")}
-    <form class="inline-add" data-add-text="recommendations"><input placeholder="Додати рекомендацію…" aria-label="Нова рекомендація"><button>＋</button></form>`;
+    <form class="inline-add" data-add-text="recommendations"><input placeholder="Додати рекомендацію…" aria-label="Нова рекомендація"><button>＋</button></form>
+    <div class="internal" id="internalBox"></div>`;
+  renderComments(o.comments || []);
   $("#btnPrint").onclick = () => window.open("/print/current", "_blank");
   $("#btnDelete").onclick = () => deleteOrder(o.number);
   $("#statusSel").onchange = async e => {
@@ -475,7 +532,7 @@ async function showOrders(){
     const list = await api("/api/orders" + (params.toString() ? "?" + params : ""));
     $("#ordersList").innerHTML = list.length ? `<div class="tbl"><table>
       <tr><th>Номер</th><th>Дата</th><th>Клієнт</th><th>Автомобіль</th><th class="r">Сума</th><th>Статус</th><th class="r" title="Витрати на Claude">Claude</th><th></th></tr>
-      ${list.map(o => `<tr><td>${esc(o.number)}</td><td>${esc(o.created_at)}</td><td>${dash(o.customer)}</td><td>${dash(o.vehicle)}</td>
+      ${list.map(o => `<tr><td>${esc(o.number)}${o.comments ? ` <span class="cc" title="Внутрішні коментарі">💬${o.comments}</span>` : ""}</td><td>${esc(o.created_at)}</td><td>${dash(o.customer)}</td><td>${dash(o.vehicle)}</td>
         <td class="r">${num(o.total)} ${esc(o.currency)}</td><td><span class="badge ${stClass(o.status)}">${esc(o.status)}</span></td><td class="r sub">${o.ai_cost ? usd(o.ai_cost) : "—"}</td>
         <td class="r"><button data-open="${esc(o.number)}">Відкрити</button> <button data-print="${esc(o.number)}">🖨</button> <button data-del-order="${esc(o.number)}" title="Видалити">🗑</button></td></tr>`).join("")}
       </table></div>` : `<div class="empty">${q || ordersStatus ? "Нічого не знайдено." : "Збережених замовлень-нарядів поки немає."}</div>`;
@@ -1061,6 +1118,7 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
     const s = await api("/api/state");
     if (s.auth) $("#btnLogout").hidden = false;
     if (s.statuses) STATUSES = s.statuses;
+    TELEGRAM = !!s.telegram;
     if (s.service && s.service.name){ $("#brand").textContent = s.service.name; document.title = s.service.name; }
     if (s.history.length) s.history.forEach(m => addMsg(m.role, m.text));
     const last = remembered();

@@ -40,6 +40,7 @@ class OrderSession:
         self.catalog = catalog
         self.store = store
         self.order: RepairOrder | None = None
+        self.comments = None  # CommentStore: внутрішні коментарі для панелі (див. web.py)
 
     @property
     def _order(self) -> RepairOrder:
@@ -437,6 +438,7 @@ class OrderSession:
         data["missing_fields"] = self.order.missing_fields()
         data["history"] = [self._visit_info(o) for o in self.store.history(self.order.vehicle.vin,
                                                                            exclude=self.order.number)[:10]]
+        data["comments"] = self.comments.list(self.order.number) if self.comments else []
         return data
 
     def get_order(self) -> str:

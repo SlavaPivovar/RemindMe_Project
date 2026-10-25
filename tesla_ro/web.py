@@ -23,12 +23,14 @@ from pydantic import BaseModel
 
 from .assistant import MODEL, RepairOrderAssistant
 from .catalog import DEFAULT_CATALOG, MODEL_CODES, Catalog, CatalogError
+from .comments import CommentError, CommentStore
 from .order import STATUSES, OrderStore, StatusError
 from .render import render_html
 from .tools import OrderSession
 from .usage import UsageLedger
 from .usage import add as add_usage
 from .usage import empty as empty_usage
+from .telegram import from_env as telegram_from_env
 from .vision import PhotoError, parse_data_url, recognize
 
 STATIC = Path(__file__).parent / "static"
@@ -92,6 +94,11 @@ class TextIn(BaseModel):
     text: str
 
 
+class CommentIn(BaseModel):
+    text: str
+    author: str = ""
+
+
 class LineEditIn(BaseModel):
     qty: float | None = None
     price: float | None = None
@@ -130,6 +137,7 @@ def create_app(
     secure_cookies: bool = False,
     secret: str | None = None,
     usage_path: str | Path | None = None,
+    telegram=None,
 ) -> FastAPI:
     """password — пароль для входу; без нього вхід не потрібен (лише для локального запуску).
     catalog_path — файл довідника, який редагується з інтерфейсу; за його відсутності створюється
@@ -140,6 +148,11 @@ def create_app(
         catalog = Catalog(json.loads(DEFAULT_CATALOG.read_text(encoding="utf-8")))
     store = OrderStore(orders_dir)
     ledger = UsageLedger(usage_path)
+    comments = CommentStore(orders_dir)
+    # telegram — фабрика (store, comments) -> TelegramBot | None; бот бачить кожне збереження замовлення.
+    bot = telegram(store, comments) if telegram else None
+    if bot:
+        store.listeners.append(bot.order_saved)
     client = client or anthropic.Anthropic()
     conversations: dict[str, Conversation] = {}
     conversations_lock = threading.Lock()
@@ -220,6 +233,7 @@ def create_app(
 
     def new_conversation() -> Conversation:
         session = OrderSession(catalog, store)
+        session.comments = comments
         return Conversation(session, RepairOrderAssistant(session, client=client, model=model, effort=effort))
 
     def conversation(sid: str | None, response: Response) -> Conversation:
@@ -254,7 +268,7 @@ def create_app(
                 if text:
                     history.append({"role": "assistant", "text": text})
         return {"order": conv.session.snapshot(), "history": history, "service": catalog.service,
-                "statuses": STATUSES,
+                "statuses": STATUSES, "telegram": bot is not None,
                 "auth": password is not None}
 
     @app.post("/api/chat")
@@ -435,6 +449,8 @@ def create_app(
             store.delete(number)
         except FileNotFoundError:
             raise HTTPException(404, "Замовлення-наряд не знайдено") from None
+        if bot:
+            bot.order_deleted(number)
         # Хто тримав це замовлення відкритим — починає з чистого аркуша.
         with conversations_lock:
             affected = [c for c in conversations.values() if c.session.order and c.session.order.number == number]
@@ -574,6 +590,7 @@ def create_app(
                 "total": str(o.totals()["total"]),
                 "currency": o.currency,
                 "ai_cost": o.ai_usage.get("cost_usd", 0),
+                "comments": comments.count(o.number),
             }
             for o in store.list()
             if (not q or matches(o, q)) and (not status or o.status == status)
@@ -612,6 +629,25 @@ def create_app(
     def http_error(_, exc: HTTPException):
         return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
 
+    @app.get("/api/orders/{number}/comments")
+    def list_comments(number: str):
+        return comments.list(number)
+
+    @app.post("/api/orders/{number}/comments")
+    def add_comment(number: str, body: CommentIn):
+        try:
+            store.load(number)
+        except FileNotFoundError:
+            raise HTTPException(404, "Замовлення-наряд ще не збережено — спершу заповніть його") from None
+        try:
+            comment = comments.add(number, body.author or "Співробітник", body.text, source="web")
+        except CommentError as exc:
+            raise HTTPException(400, str(exc)) from None
+        if bot:
+            bot.comment_added(number, comment)
+        return comments.list(number)
+
+    app.state.telegram = bot
     return app
 
 
@@ -657,7 +693,11 @@ def main(argv: list[str] | None = None) -> int:
     catalog_path = args.catalog or data_dir / "catalog.json"
     app = create_app(catalog_path, args.orders_dir, model=args.model, effort=args.effort,
                      password=password, secure_cookies=secure, secret=load_secret(data_dir),
-                     usage_path=data_dir / "usage.jsonl")
+                     usage_path=data_dir / "usage.jsonl",
+                     telegram=lambda store, comments: telegram_from_env(store, comments, data_dir))
+    if app.state.telegram:
+        app.state.telegram.start()
+        print("Telegram-бот увімкнено")
     print(f"Відкрийте в браузері: http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True, forwarded_allow_ips="*")
     return 0

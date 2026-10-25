@@ -9,3 +9,4 @@ build/
 /catalog.tmp
 /.auth_secret
 /usage.jsonl
+/telegram.json

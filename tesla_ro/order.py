@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -15,6 +16,8 @@ from pathlib import Path
 def money(value: float | Decimal) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+
+log = logging.getLogger(__name__)
 
 # Життєвий цикл замовлення-наряду.
 DRAFT = "чернетка"
@@ -179,6 +182,7 @@ class OrderStore:
         self.dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._reserved: set[str] = set()
+        self.listeners: list = []  # викликаються після кожного збереження: listener(order)
 
     def next_number(self) -> str:
         """Видати новий номер. Номер резервується, навіть якщо замовлення ще не збережене,
@@ -225,6 +229,11 @@ class OrderStore:
             tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
             tmp.write_text(json.dumps(order.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
             os.replace(tmp, path)
+        for listener in self.listeners:
+            try:
+                listener(order)
+            except Exception:  # сповіщення (Telegram) не повинні ламати збереження
+                log.exception("Помилка обробника збереження")
         return path
 
     def delete(self, number: str) -> None:
