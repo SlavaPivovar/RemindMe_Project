@@ -74,6 +74,24 @@ class LineIn(BaseModel):
     include_parts: bool = True
 
 
+class CustomerIn(BaseModel):
+    name: str = ""
+    phone: str = ""
+    email: str = ""
+
+
+class VehicleIn(BaseModel):
+    vin: str = ""
+    odometer_km: int | None = None
+    plate: str = ""
+    color: str = ""
+    battery_percent: int | None = None
+
+
+class TextIn(BaseModel):
+    text: str
+
+
 class LineEditIn(BaseModel):
     qty: float | None = None
     price: float | None = None
@@ -291,13 +309,13 @@ def create_app(
             raise HTTPException(409, "Помічник ще відповідає — спробуйте за мить")
         try:
             try:
-                action()
+                extra = action()
             except ToolError as exc:
                 raise HTTPException(400, str(exc)) from None
             conv.manual_changes.append(note)
         finally:
             conv.lock.release()
-        return {"order": conv.session.snapshot()}
+        return {"order": conv.session.snapshot(), **(extra if isinstance(extra, dict) else {})}
 
     def line_name(conv: Conversation, kind: str, number: int) -> str:
         lines = conv.session.order.labor if kind == "labor" else conv.session.order.parts
@@ -354,11 +372,19 @@ def create_app(
 
     @app.delete("/api/order/{kind}/{number}")
     def delete_line(kind: str, number: int, response: Response, tesla_ro_sid: str | None = Cookie(None)):
-        if kind not in ("labor", "parts"):
-            raise HTTPException(404, "Невідомий тип рядка")
+        """Видалити рядок роботи чи запчастини, скаргу або рекомендацію."""
         conv = conversation(tesla_ro_sid, response)
-        name = line_name(conv, kind, number) if conv.session.order else ""
-        return edit_order(conv, lambda: conv.session.remove_line(kind, number), f"видалив «{name}»")
+        s, order = conv.session, conv.session.order
+        if kind in ("labor", "parts"):
+            name = line_name(conv, kind, number) if order else ""
+            return edit_order(conv, lambda: s.remove_line(kind, number), f"видалив «{name}»")
+        if kind in ("complaints", "recommendations"):
+            items = getattr(order, kind) if order else []
+            text = items[number - 1] if 1 <= number <= len(items) else f"№{number}"
+            remove = s.remove_complaint if kind == "complaints" else s.remove_recommendation
+            label = "скаргу" if kind == "complaints" else "рекомендацію"
+            return edit_order(conv, lambda: remove(number), f"видалив {label} «{text}»")
+        raise HTTPException(404, "Невідомий тип рядка")
 
     @app.post("/api/order/status")
     def order_status(body: StatusIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
@@ -380,14 +406,81 @@ def create_app(
             conv.lock.release()
         return {"order": conv.session.snapshot()}
 
-    @app.post("/api/reset")
-    def reset(response: Response, tesla_ro_sid: str | None = Cookie(None)):
-        conv = conversation(tesla_ro_sid, response)
+    def restart(conv: Conversation) -> None:
+        """Почати з чистого аркуша: нова розмова з помічником без замовлення-наряду."""
         with conversations_lock:
             fresh = new_conversation()
             conv.session, conv.assistant = fresh.session, fresh.assistant
             conv.manual_changes.clear()
+
+    @app.post("/api/reset")
+    def reset(response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        restart(conversation(tesla_ro_sid, response))
         return {"order": None}
+
+    @app.post("/api/order/new")
+    def new_order_manual(response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        """Порожнє замовлення-наряд для ручного заповнення (без помічника)."""
+        conv = conversation(tesla_ro_sid, response)
+        if conv.lock.locked():
+            raise HTTPException(409, "Помічник ще відповідає — спробуйте за мить")
+        restart(conv)
+        conv.session.new_order()
+        conv.manual_changes.append("створив нове порожнє замовлення-наряд")
+        return {"order": conv.session.snapshot()}
+
+    @app.delete("/api/orders/{number}")
+    def delete_order(number: str):
+        try:
+            store.delete(number)
+        except FileNotFoundError:
+            raise HTTPException(404, "Замовлення-наряд не знайдено") from None
+        # Хто тримав це замовлення відкритим — починає з чистого аркуша.
+        with conversations_lock:
+            affected = [c for c in conversations.values() if c.session.order and c.session.order.number == number]
+        for c in affected:
+            restart(c)
+        return {"deleted": number}
+
+    @app.put("/api/order/customer")
+    def set_customer(body: CustomerIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+        return edit_order(conv, lambda: conv.session.set_customer(body.name, body.phone, body.email),
+                          f"замовник: {body.name}, {body.phone}")
+
+    @app.put("/api/order/vehicle")
+    def set_vehicle(body: VehicleIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+
+        def action():
+            result = json.loads(conv.session.set_vehicle(body.vin, body.odometer_km, body.plate, body.color,
+                                                         body.battery_percent))
+            return {"warnings": result["vin_warnings"]}
+
+        return edit_order(conv, action, f"автомобіль: VIN {body.vin}, пробіг {body.odometer_km}")
+
+    @app.post("/api/order/complaints")
+    def add_complaint(body: TextIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+        text = body.text.strip()
+        if not text:
+            raise HTTPException(400, "Порожня скарга")
+        return edit_order(conv, lambda: conv.session.add_complaint(text), f"додав скаргу «{text}»")
+
+    @app.post("/api/order/recommendations")
+    def add_recommendation(body: TextIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+        text = body.text.strip()
+        if not text:
+            raise HTTPException(400, "Порожня рекомендація")
+        return edit_order(conv, lambda: conv.session.add_recommendation(text),
+                          f"додав рекомендацію «{text}»")
+
+    @app.put("/api/order/diagnosis")
+    def set_diagnosis(body: TextIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+        return edit_order(conv, lambda: conv.session.set_diagnosis(body.text),
+                          f"діагностика: «{body.text.strip()}»")
 
     model_names = {"MODEL_S": "Model S", "MODEL_3": "Model 3", "MODEL_X": "Model X", "MODEL_Y": "Model Y",
                    "CYBERTRUCK": "Cybertruck"}

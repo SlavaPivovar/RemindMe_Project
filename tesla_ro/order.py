@@ -187,6 +187,8 @@ class OrderStore:
         prefix = f"ЗН-{year}-"
         with self._lock:
             taken = {p.stem for p in self.dir.glob(f"{prefix}*.json")} | self._reserved
+            # Номери видалених замовлень теж зайняті: номер не повинен дістатися іншому замовленню.
+            taken |= {p.name.split(".")[0] for p in self.trash.glob(f"{prefix}*.json")}
             nums = [int(n[len(prefix):]) for n in taken if n.startswith(prefix) and n[len(prefix):].isdigit()]
             number = f"{prefix}{max(nums, default=0) + 1:05d}"
             self._reserved.add(number)
@@ -206,13 +208,37 @@ class OrderStore:
                 continue
         return orders
 
+    @property
+    def trash(self) -> Path:
+        return self.dir / "deleted"
+
+    def is_deleted(self, number: str) -> bool:
+        return any(p.name.split(".")[0] == number for p in self.trash.glob(f"{number}*.json"))
+
     def save(self, order: RepairOrder) -> Path:
         path = self._path(order.number)
-        # Пишемо в тимчасовий файл і атомарно підміняємо: при збої не лишиться напівзаписаного файлу.
-        tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(json.dumps(order.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        with self._lock:
+            if self.is_deleted(order.number):
+                # Замовлення видалили, поки воно було відкрите деінде, — не воскрешаємо його.
+                raise FileNotFoundError(f"Замовлення-наряд {order.number} видалено")
+            # Пишемо в тимчасовий файл і атомарно підміняємо: при збої не лишиться напівзаписаного файлу.
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_text(json.dumps(order.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
         return path
+
+    def delete(self, number: str) -> None:
+        """Перенести замовлення-наряд у кошик (orders/deleted/); звідти його можна повернути вручну."""
+        path = self._path(number)
+        with self._lock:
+            if not path.exists():
+                raise FileNotFoundError(number)
+            self.trash.mkdir(exist_ok=True)
+            target = self.trash / path.name
+            if target.exists():
+                target = self.trash / f"{number}.{datetime.now():%Y%m%d-%H%M%S}.json"
+            os.replace(path, target)
+            path.with_suffix(".html").unlink(missing_ok=True)  # друковану форму завжди можна згенерувати знову
 
     def history(self, vin: str, exclude: str | None = None) -> list[RepairOrder]:
         """Попередні замовлення-наряди автомобіля з цим VIN, від найновішого."""

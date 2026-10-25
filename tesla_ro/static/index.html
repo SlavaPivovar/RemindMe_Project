@@ -103,7 +103,7 @@ dialog td button{padding:3px 8px;font-size:12px}
 .acts{white-space:nowrap}
 .form{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px 12px;align-items:start;padding:12px 0}
 .form label{color:var(--muted);padding-top:8px}
-.form input[type=text],.form input:not([type]),.form select{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.form input[type=text],.form input[type=tel],.form input[type=email],.form input:not([type]),.form select{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
 .form input:disabled{opacity:.6}
 .checks{display:flex;flex-wrap:wrap;gap:6px 14px;padding-top:7px}
 .checks label{color:var(--text);padding:0;display:flex;gap:5px;align-items:center}
@@ -133,6 +133,20 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .st-5{background:rgba(220,38,38,.12);color:#b91c1c}
 .status-log{font-size:12px;color:var(--muted);margin:-6px 0 12px}
 .line-add{display:flex;gap:8px;margin-top:8px}
+.sec-head{display:flex;align-items:center;gap:8px}
+.sec-head h3{flex:1}
+.sec-head button,.plain-edit button{padding:2px 8px;font-size:12px}
+.plain-edit{list-style:none;padding:0;margin:0}
+.plain-edit li{display:flex;gap:8px;align-items:flex-start;padding:3px 0}
+.plain-edit li span{flex:1}
+.plain-edit li span::before{content:"• ";color:var(--muted)}
+.inline-add{display:flex;gap:6px;margin-top:6px}
+.inline-add input{flex:1;min-width:0;font:inherit;font-size:13px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.inline-add button{padding:4px 12px}
+.empty .primary{margin-top:14px}
+.form textarea{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);min-height:110px;resize:vertical}
+.form-warn{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:8px 12px;margin-top:10px}
+button.danger-lite{color:var(--accent)}
 .line-add button{font-size:13px;padding:5px 12px}
 #orderBody td.acts button{padding:2px 7px;font-size:12px}
 .ai-cost{font-size:12px;color:var(--muted);margin:-6px 0 12px}
@@ -183,6 +197,7 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
   <section id="chat" class="card show">
     <div class="log" id="log"></div>
     <div class="hints" id="hints">
+      <button data-manual>📝 Заповнити вручну, без помічника</button>
       <button>Нове замовлення: Іваненко Іван, +380 67 000 00 00, VIN 5YJ3E1EA9LF000316, пробіг 48 000 км</button>
       <button>Скриплять гальма спереду</button>
       <button>Не працює кондиціонер</button>
@@ -277,10 +292,18 @@ function remembered(){
 }
 
 let currentOrder = null;
+const textList = (items, kind) => items.length
+  ? `<ul class="plain-edit">${items.map((x, i) => `<li><span>${esc(x)}</span><button data-text-del="${kind}:${i + 1}" title="Видалити">✕</button></li>`).join("")}</ul>`
+  : `<div class="sub">—</div>`;
 function renderOrder(o){
   const box = $("#orderBody");
   if (!o) currentOrder = null;
-  if (!o){ box.innerHTML = `<div class="empty">Замовлення-наряд з'явиться тут, щойно ви почнете діалог.</div>`; return; }
+  if (!o){
+    box.innerHTML = `<div class="empty">Замовлення-наряд з'явиться тут, щойно ви почнете діалог із помічником.<br>
+      <button class="primary" id="btnManual">📝 Заповнити вручну</button></div>`;
+    $("#btnManual").onclick = newManualOrder;
+    return;
+  }
   remember(o.number);
   currentOrder = o;
   const c = o.customer, v = o.vehicle, t = o.totals, cur = esc(o.currency);
@@ -304,11 +327,12 @@ function renderOrder(o){
       <select class="status ${stClass(o.status)}" id="statusSel" title="Статус замовлення-наряду">
         ${STATUSES.map(s => `<option ${s === o.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
       <span class="badge">${esc(o.created_at)}</span>
-      <div class="actions"><button id="btnPrint">🖨 Друк</button></div>
+      <div class="actions"><button id="btnPrint">🖨 Друк</button><button id="btnDelete" class="danger-lite" title="Видалити замовлення-наряд">🗑</button></div>
     </div>
     ${o.ai_usage && o.ai_usage.requests ? `<div class="ai-cost" title="Вартість запитів до Claude по цьому замовленню-наряду (у друковану форму не потрапляє)">Claude: ${usd(o.ai_usage.cost_usd)} · запитів: ${o.ai_usage.requests}</div>` : ""}
     ${o.status_log && o.status_log.length ? `<div class="status-log">${o.status_log.slice(-5).map(e => `${esc(e.status)} ${esc(e.at)}`).join(" → ")}</div>` : ""}
     ${o.missing_fields.length ? `<div class="missing">Не заповнено: ${o.missing_fields.map(esc).join(", ")}</div>` : `<div class="done">✓ Усі обов'язкові поля заповнено</div>`}
+    <div class="sec-head"><h3>Замовник і автомобіль</h3><button data-edit-head title="Змінити замовника й автомобіль">✎ Змінити</button></div>
     <div class="info">
       <dl><dt>Замовник</dt><dd>${dash(c.name)}</dd><dt>Телефон</dt><dd>${dash(c.phone)}</dd><dt>E-mail</dt><dd>${dash(c.email)}</dd></dl>
       <dl><dt>Автомобіль</dt><dd>${v.model ? "Tesla " + esc(v.model) + " " + dash(v.year) : "—"}</dd><dt>VIN</dt><dd>${dash(v.vin)}</dd>
@@ -323,8 +347,10 @@ function renderOrder(o){
         ${h.recommendations.length ? `<ul>${h.recommendations.map(r => `<li class="rec">${esc(r)}</li>`).join("")}</ul>` : ""}
       </div>`).join("")}</div>` : ""}
     <h3>Скарги клієнта</h3>
-    ${o.complaints.length ? `<ul class="plain">${o.complaints.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : `<div style="color:var(--muted)">—</div>`}
-    ${o.diagnosis ? `<h3>Діагностика</h3><div>${esc(o.diagnosis)}</div>` : ""}
+    ${textList(o.complaints, "complaints")}
+    <form class="inline-add" data-add-text="complaints"><input placeholder="Додати скаргу…" aria-label="Нова скарга"><button>＋</button></form>
+    <div class="sec-head"><h3>Діагностика</h3><button data-edit-diag title="Змінити">✎</button></div>
+    <div>${o.diagnosis ? esc(o.diagnosis).replace(/\n/g, "<br>") : `<span class="sub">—</span>`}</div>
     <h3>Роботи</h3>
     <div class="tbl"><table><tr><th class="hide-m">№</th><th class="hide-m">Код</th><th>Найменування</th><th class="r hide-m">Кількість</th><th class="r hide-m">Ціна</th><th class="r hide-m">Знижка</th><th class="r">Сума</th><th></th></tr>${lines(o.labor, true)}</table></div>
     <div class="line-add"><button data-add-line="labor">＋ Додати роботу</button></div>
@@ -337,8 +363,11 @@ function renderOrder(o){
       ${Number(o.vat_percent) ? `<div><span>${vat}</span><span>${num(t.vat)} ${cur}</span></div>` : ""}
       <div class="grand"><span>Разом</span><span>${num(t.total)} ${cur}</span></div>
     </div>
-    ${o.recommendations.length ? `<h3>Рекомендації</h3><ul class="plain">${o.recommendations.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}`;
+    <h3>Рекомендації</h3>
+    ${textList(o.recommendations, "recommendations")}
+    <form class="inline-add" data-add-text="recommendations"><input placeholder="Додати рекомендацію…" aria-label="Нова рекомендація"><button>＋</button></form>`;
   $("#btnPrint").onclick = () => window.open("/print/current", "_blank");
+  $("#btnDelete").onclick = () => deleteOrder(o.number);
   $("#statusSel").onchange = async e => {
     const status = e.target.value;
     try{
@@ -448,7 +477,7 @@ async function showOrders(){
       <tr><th>Номер</th><th>Дата</th><th>Клієнт</th><th>Автомобіль</th><th class="r">Сума</th><th>Статус</th><th class="r" title="Витрати на Claude">Claude</th><th></th></tr>
       ${list.map(o => `<tr><td>${esc(o.number)}</td><td>${esc(o.created_at)}</td><td>${dash(o.customer)}</td><td>${dash(o.vehicle)}</td>
         <td class="r">${num(o.total)} ${esc(o.currency)}</td><td><span class="badge ${stClass(o.status)}">${esc(o.status)}</span></td><td class="r sub">${o.ai_cost ? usd(o.ai_cost) : "—"}</td>
-        <td class="r"><button data-open="${esc(o.number)}">Відкрити</button> <button data-print="${esc(o.number)}">🖨</button></td></tr>`).join("")}
+        <td class="r"><button data-open="${esc(o.number)}">Відкрити</button> <button data-print="${esc(o.number)}">🖨</button> <button data-del-order="${esc(o.number)}" title="Видалити">🗑</button></td></tr>`).join("")}
       </table></div>` : `<div class="empty">${q || ordersStatus ? "Нічого не знайдено." : "Збережених замовлень-нарядів поки немає."}</div>`;
   }catch(e){ $("#ordersList").textContent = e.message; }
 }
@@ -462,6 +491,7 @@ $("#ordersQuery").oninput = () => { clearTimeout(ordersTimer); ordersTimer = set
 $("#ordersList").addEventListener("click", async e => {
   const open = e.target.dataset.open, print = e.target.dataset.print;
   if (print) window.open("/print/" + encodeURIComponent(print), "_blank");
+  if (e.target.dataset.delOrder){ if (await deleteOrder(e.target.dataset.delOrder)) showOrders(); return; }
   if (open){
     const data = await api(`/api/orders/${encodeURIComponent(open)}/open`, {method: "POST"});
     $("#ordersDlg").close();
@@ -477,7 +507,120 @@ $("#orderBody").addEventListener("click", e => {
   if (d.addLine) addLineDialog(d.addLine);
   if (d.lineEdit) editLineDialog(...d.lineEdit.split(":"));
   if (d.lineDel) deleteLine(...d.lineDel.split(":"));
+  if (d.editHead !== undefined) editHeadDialog();
+  if (d.editDiag !== undefined) editDiagnosisDialog();
+  if (d.textDel){
+    const [kind, n] = d.textDel.split(":");
+    const item = currentOrder[kind][n - 1];
+    if (okToEdit() && confirm(`Видалити «${item}»?`)) orderEdit("DELETE", `/api/order/${kind}/${n}`);
+  }
 });
+$("#orderBody").addEventListener("submit", async e => {
+  const kind = e.target.dataset.addText;
+  if (!kind) return;
+  e.preventDefault();
+  const input = e.target.querySelector("input"), text = input.value.trim();
+  if (!text || !okToEdit()) return;
+  if (await orderEdit("POST", `/api/order/${kind}`, {text})) document.querySelector(`[data-add-text="${kind}"] input`).focus();
+});
+
+// ---------- Нове замовлення вручну, шапка, діагностика, видалення ----------
+async function newManualOrder(){
+  if (busy) return;
+  try{
+    const data = await api("/api/order/new", {method: "POST"});
+    $("#log").innerHTML = "";
+    addMsg("assistant", `Створено порожнє замовлення-наряд № ${data.order.number}. Заповнюйте його в панелі праворуч або пишіть мені — я допоможу.`);
+    renderOrder(data.order);
+    document.querySelector('.tabs button[data-tab="order"]').click();
+    editHeadDialog();
+  }catch(e){ addMsg("error", e.message); }
+}
+
+async function deleteOrder(number){
+  if (!confirm(`Видалити замовлення-наряд № ${number}?\nЙого буде перенесено в кошик на сервері.`)) return false;
+  try{
+    await api(`/api/orders/${encodeURIComponent(number)}`, {method: "DELETE"});
+  }catch(e){ alert(e.message); return false; }
+  if (currentOrder && currentOrder.number === number){
+    remember(null);
+    $("#log").innerHTML = "";
+    addMsg("assistant", `Замовлення-наряд № ${number} видалено.`);
+    renderOrder(null);
+  }
+  return true;
+}
+
+function editHeadDialog(){
+  if (!currentOrder || !okToEdit()) return;
+  const c = currentOrder.customer, v = currentOrder.vehicle;
+  $("#lineTitle").textContent = "Замовник і автомобіль";
+  $("#lineBody").innerHTML = `<form class="form" id="headForm" autocomplete="off">
+      <label for="hName">ПІБ замовника</label><input id="hName" value="${esc(c.name)}">
+      <label for="hPhone">Телефон</label><input id="hPhone" type="tel" value="${esc(c.phone)}" placeholder="+380…">
+      <label for="hEmail">E-mail</label><input id="hEmail" type="email" value="${esc(c.email)}">
+      <label for="hVin">VIN</label><div><input id="hVin" value="${esc(v.vin)}" maxlength="20" style="text-transform:uppercase" placeholder="17 символів">
+        <div class="hint">Модель і рік визначаться за VIN.</div></div>
+      <label for="hOdo">Пробіг, км</label><input id="hOdo" inputmode="numeric" value="${v.odometer_km ?? ""}">
+      <label for="hPlate">Держ. номер</label><input id="hPlate" value="${esc(v.plate)}">
+      <label for="hColor">Колір</label><input id="hColor" value="${esc(v.color)}">
+      <label for="hBat">Заряд ВВБ, %</label><input id="hBat" inputmode="numeric" value="${v.battery_percent ?? ""}">
+      <span></span><div><div class="form-err" id="lineErr" hidden></div><div class="form-warn" id="headWarn" hidden></div>
+        <div class="form-actions"><button class="primary" type="submit" id="headSave">Зберегти</button><button type="button" id="lineCancel">Скасувати</button></div></div>
+    </form>`;
+  $("#lineDlg").showModal();
+  $("#lineCancel").onclick = () => $("#lineDlg").close();
+  const int = v => v.trim() === "" ? null : Number(v.trim().replace(/\s/g, ""));
+  $("#headForm").oninput = () => {
+    // Після попередження поля знову змінили — кнопка знову зберігає, а не просто закриває вікно.
+    delete $("#headSave").dataset.done;
+    $("#headSave").textContent = "Зберегти";
+    $("#headWarn").hidden = true;
+  };
+  $("#headForm").onsubmit = async e => {
+    e.preventDefault();
+    if ($("#headSave").dataset.done){ $("#lineDlg").close(); return; }
+    const odo = int($("#hOdo").value), bat = int($("#hBat").value);
+    if ([odo, bat].some(x => x !== null && !Number.isInteger(x))){
+      $("#lineErr").hidden = false; $("#lineErr").textContent = "Пробіг і заряд — цілі числа"; return;
+    }
+    const customer = {name: $("#hName").value, phone: $("#hPhone").value, email: $("#hEmail").value};
+    const vehicle = {vin: $("#hVin").value, odometer_km: odo, plate: $("#hPlate").value, color: $("#hColor").value, battery_percent: bat};
+    if (!await orderEdit("PUT", "/api/order/customer", customer)) return;
+    let warnings = [];
+    try{
+      const data = await api("/api/order/vehicle", {method: "PUT", body: JSON.stringify(vehicle)});
+      renderOrder(data.order);
+      warnings = data.warnings || [];
+    }catch(err){ $("#lineErr").hidden = false; $("#lineErr").textContent = err.message; return; }
+    if (vehicle.vin.trim() && warnings.length){
+      // Збережено, але VIN варто перевірити — показуємо попередження, перш ніж закрити вікно.
+      $("#headWarn").hidden = false;
+      $("#headWarn").innerHTML = "Збережено. Перевірте VIN:<br>" + warnings.map(esc).join("<br>");
+      $("#headSave").textContent = "Готово"; $("#headSave").dataset.done = "1";
+      return;
+    }
+    $("#lineDlg").close();
+  };
+  $("#hName").focus();
+}
+
+function editDiagnosisDialog(){
+  if (!currentOrder || !okToEdit()) return;
+  $("#lineTitle").textContent = "Діагностика";
+  $("#lineBody").innerHTML = `<form class="form" id="diagForm">
+      <label for="dText">Висновок майстра</label><textarea id="dText">${esc(currentOrder.diagnosis)}</textarea>
+      <span></span><div><div class="form-err" id="lineErr" hidden></div>
+        <div class="form-actions"><button class="primary" type="submit">Зберегти</button><button type="button" id="lineCancel">Скасувати</button></div></div>
+    </form>`;
+  $("#lineDlg").showModal();
+  $("#lineCancel").onclick = () => $("#lineDlg").close();
+  $("#diagForm").onsubmit = async e => {
+    e.preventDefault();
+    if (await orderEdit("PUT", "/api/order/diagnosis", {text: $("#dText").value})) $("#lineDlg").close();
+  };
+  $("#dText").focus();
+}
 
 // ---------- Ручне редагування рядків замовлення-наряду ----------
 function okToEdit(){
@@ -662,7 +805,11 @@ $("#composer").addEventListener("submit", e => { e.preventDefault(); send($("#in
 $("#input").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); send($("#input").value); }
 });
-$("#hints").addEventListener("click", e => { if (e.target.tagName === "BUTTON") send(e.target.textContent); });
+$("#hints").addEventListener("click", e => {
+  if (e.target.tagName !== "BUTTON") return;
+  if (e.target.dataset.manual !== undefined) return newManualOrder();
+  send(e.target.textContent);
+});
 $("#btnOrders").onclick = showOrders;
 $("#btnLogout").onclick = () => { location.href = "/logout"; };
 $("#closeDlg").onclick = () => $("#ordersDlg").close();

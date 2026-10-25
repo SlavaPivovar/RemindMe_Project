@@ -204,6 +204,28 @@ class OrderSession:
         self._order.recommendations.append(text.strip())
         return "ok"
 
+    @autosave
+    def remove_complaint(self, number: int) -> str:
+        """Видалити скаргу за номером (з 1).
+
+        Args:
+            number: Номер скарги в списку.
+        """
+        self._line(self._order.complaints, number)  # перевірка номера
+        self._order.complaints.pop(number - 1)
+        return "ok"
+
+    @autosave
+    def remove_recommendation(self, number: int) -> str:
+        """Видалити рекомендацію за номером (з 1).
+
+        Args:
+            number: Номер рекомендації в списку.
+        """
+        self._line(self._order.recommendations, number)  # перевірка номера
+        self._order.recommendations.pop(number - 1)
+        return "ok"
+
     # --- довідник ---
 
     def search_operations(self, query: str) -> str:
