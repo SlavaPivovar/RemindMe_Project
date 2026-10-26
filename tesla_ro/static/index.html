@@ -155,6 +155,24 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .comment-form input,.comment-form textarea{font:inherit;font-size:14px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);min-width:0}
 .comment-form textarea{grid-column:1 / -1;min-height:64px;resize:vertical}
 .cc{font-size:11px;color:var(--muted);white-space:nowrap}
+.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:8px;margin-bottom:10px}
+.photo{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel);display:flex;flex-direction:column;min-width:0}
+.photo a{display:block;aspect-ratio:4/3;background:var(--bg)}
+.photo img{width:100%;height:100%;object-fit:cover;display:block}
+.photo .pc{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;padding:6px;font-size:12px}
+.photo select{font:inherit;font-size:12px;padding:3px 4px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--text);min-width:0;flex:1 1 100%}
+.photo label{display:flex;align-items:center;gap:3px;white-space:nowrap}
+.photo button{padding:1px 7px;font-size:12px;margin-left:auto}
+.photo-add{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.photo-add select{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text)}
+.approval{border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:13px;background:var(--bg);border:1px solid var(--line)}
+.approval.ok{color:var(--ok)}
+.approval.no,.approval .warn{color:var(--warn)}
+.approval .warn{display:block;margin-top:4px}
+.tools-sec{border-top:1px solid var(--line);margin-top:18px;padding-top:4px}
+.tools-sec .send-row{margin:8px 0}
+.import-list{max-height:220px;overflow:auto;font-size:13px;margin:6px 0}
+.import-list div{padding:2px 0}
 .send-sec{border-top:1px solid var(--line);padding:12px 0 4px}
 .send-sec:first-child{border-top:0;padding-top:4px}
 .send-sec h3{margin:0 0 6px}
@@ -305,7 +323,7 @@ function remembered(){
   try{ return localStorage.getItem("lastOrder"); }catch(e){ return null; }
 }
 
-let currentOrder = null, TELEGRAM = false;
+let currentOrder = null, TELEGRAM = false, BACKUP_CHAT = false, PHOTO_KINDS = ["до", "після", "пошкодження", "інше"];
 
 // ---------- Внутрішні коментарі (не друкуються) ----------
 function authorName(){ try{ return localStorage.getItem("author") || ""; }catch(e){ return ""; } }
@@ -343,14 +361,86 @@ function renderComments(list){
   };
 }
 
-// Коментарі з Telegram з'являються самі: раз на 20 секунд перевіряємо відкрите замовлення.
+// Коментарі й фото з Telegram і відповідь клієнта на кошторис з'являються самі:
+// раз на 20 секунд перевіряємо відкрите замовлення.
 setInterval(async () => {
   if (!currentOrder || document.hidden || !$("#internalBox")) return;
   try{
-    const list = await api(`/api/orders/${encodeURIComponent(currentOrder.number)}/comments`);
-    if (String(list.length) !== $("#internalBox").dataset.count) renderComments(list);
+    const x = await api(`/api/orders/${encodeURIComponent(currentOrder.number)}/extras`);
+    if (String(x.comments.length) !== $("#internalBox").dataset.count) renderComments(x.comments);
+    if (JSON.stringify(x.photos) !== JSON.stringify(currentOrder.photos || [])) renderPhotos(x.photos);
+    if (JSON.stringify(x.approval) !== JSON.stringify(currentOrder.approval || null)) renderApproval(x.approval);
   }catch(e){}
 }, 20000);
+
+// ---------- Погодження кошторису клієнтом ----------
+function renderApproval(a){
+  if (!currentOrder || !$("#approvalBox")) return;
+  currentOrder.approval = a;
+  const box = $("#approvalBox"), o = currentOrder;
+  if (!a){ box.hidden = true; return; }
+  box.hidden = false;
+  const sum = `${num(a.total)} ${esc(a.currency || o.currency)}`;
+  const changed = a.status !== "declined" && Math.abs(Number(a.total) - Number(o.totals.total)) > 0.004;
+  const text = a.status === "approved" ? `✅ Клієнт погодив кошторис на ${sum} · ${esc(a.at)}`
+    : a.status === "declined" ? `❌ Клієнт відмовився від кошторису на ${sum} · ${esc(a.at)}`
+    : `⏳ Кошторис на ${sum} надіслано на погодження ${esc(a.sent_at)} — чекаємо відповіді клієнта`;
+  box.className = "approval " + (a.status === "approved" ? "ok" : a.status === "declined" ? "no" : "");
+  box.innerHTML = text + (changed ? `<span class="warn">⚠ Відтоді сума змінилась: зараз ${num(o.totals.total)} ${esc(o.currency)}. Надішліть кошторис на погодження ще раз (📤 Клієнту).</span>` : "");
+}
+
+// ---------- Фото до замовлення ----------
+function renderPhotos(list){
+  const box = $("#photoBox");
+  if (!box || !currentOrder) return;
+  currentOrder.photos = list;
+  const n = encodeURIComponent(currentOrder.number);
+  const kind = box.dataset.kind || "до";
+  const toClient = list.filter(p => p.to_client).length;
+  box.innerHTML = `<h3>📷 Фото${list.length ? " · " + list.length : ""}</h3>
+    <div class="sub" style="margin:-4px 0 10px">До й після ремонту, пошкодження. Позначені «клієнту» бот надсилає разом із PDF${toClient ? ` (зараз: ${toClient})` : ""}.${TELEGRAM ? " Фото відповіддю на картку в Telegram-групі теж потрапляють сюди." : ""}</div>
+    ${list.length ? `<div class="photos">${list.map(p => `<div class="photo">
+        <a href="/photos/${n}/${esc(p.id)}" target="_blank" rel="noopener" title="${esc(p.author)} · ${esc(p.at)}"><img loading="lazy" alt="Фото: ${esc(p.kind)}" src="/photos/${n}/${esc(p.id)}"></a>
+        <div class="pc"><select data-photo-kind="${esc(p.id)}" aria-label="Тип фото">${PHOTO_KINDS.map(k => `<option ${k === p.kind ? "selected" : ""}>${esc(k)}</option>`).join("")}</select>
+          <label><input type="checkbox" data-photo-client="${esc(p.id)}" ${p.to_client ? "checked" : ""}> клієнту</label>
+          <button data-photo-del="${esc(p.id)}" title="Видалити фото">✕</button></div>
+      </div>`).join("")}</div>` : ""}
+    <div class="photo-add"><select id="photoKind" aria-label="Тип нових фото">${PHOTO_KINDS.map(k => `<option ${k === kind ? "selected" : ""}>${esc(k)}</option>`).join("")}</select>
+      <button id="photoAdd">📷 Додати фото</button><span class="sub" id="photoNote"></span>
+      <input type="file" id="photoFiles" accept="image/*" multiple hidden></div>`;
+  $("#photoKind").onchange = e => { box.dataset.kind = e.target.value; };
+  $("#photoAdd").onclick = () => $("#photoFiles").click();
+  $("#photoFiles").onchange = async e => {
+    const files = [...e.target.files], number = currentOrder.number;
+    e.target.value = "";
+    let last = null;
+    for (const [i, file] of files.entries()){
+      $("#photoNote").textContent = `Завантаження ${i + 1} з ${files.length}…`;
+      try{
+        const image = await shrinkPhoto(file);
+        last = await api(`/api/orders/${encodeURIComponent(number)}/photos`, {method: "POST",
+          body: JSON.stringify({image, kind: $("#photoKind").value, author: authorName()})});
+      }catch(err){ alert(err.message); break; }
+    }
+    if (last && currentOrder && currentOrder.number === number) renderPhotos(last);
+    else if ($("#photoNote")) $("#photoNote").textContent = "";
+  };
+}
+document.addEventListener("change", async e => {
+  const d = e.target.dataset;
+  if (!currentOrder || (!d.photoKind && !d.photoClient)) return;
+  const id = d.photoKind || d.photoClient;
+  const body = d.photoKind ? {kind: e.target.value} : {to_client: e.target.checked};
+  try{ renderPhotos(await api(`/api/orders/${encodeURIComponent(currentOrder.number)}/photos/${id}`, {method: "PATCH", body: JSON.stringify(body)})); }
+  catch(err){ alert(err.message); }
+});
+document.addEventListener("click", async e => {
+  const id = e.target.dataset && e.target.dataset.photoDel;
+  if (!id || !currentOrder) return;
+  if (!confirm("Видалити це фото?")) return;
+  try{ renderPhotos(await api(`/api/orders/${encodeURIComponent(currentOrder.number)}/photos/${id}`, {method: "DELETE"})); }
+  catch(err){ alert(err.message); }
+});
 const textList = (items, kind) => items.length
   ? `<ul class="plain-edit">${items.map((x, i) => `<li><span>${esc(x)}</span><button data-text-del="${kind}:${i + 1}" title="Видалити">✕</button></li>`).join("")}</ul>`
   : `<div class="sub">—</div>`;
@@ -390,6 +480,7 @@ function renderOrder(o){
     </div>
     ${o.ai_usage && o.ai_usage.requests ? `<div class="ai-cost" title="Вартість запитів до Claude по цьому замовленню-наряду (у друковану форму не потрапляє)">Claude: ${usd(o.ai_usage.cost_usd)} · запитів: ${o.ai_usage.requests}</div>` : ""}
     ${o.status_log && o.status_log.length ? `<div class="status-log">${o.status_log.slice(-5).map(e => `${esc(e.status)} ${esc(e.at)}`).join(" → ")}</div>` : ""}
+    <div id="approvalBox" hidden></div>
     ${o.missing_fields.length ? `<div class="missing">Не заповнено: ${o.missing_fields.map(esc).join(", ")}</div>` : `<div class="done">✓ Усі обов'язкові поля заповнено</div>`}
     <div class="sec-head"><h3>Замовник і автомобіль</h3><button data-edit-head title="Змінити замовника й автомобіль">✎ Змінити</button></div>
     <div class="info">
@@ -425,7 +516,10 @@ function renderOrder(o){
     <h3>Рекомендації</h3>
     ${textList(o.recommendations, "recommendations")}
     <form class="inline-add" data-add-text="recommendations"><input placeholder="Додати рекомендацію…" aria-label="Нова рекомендація"><button>＋</button></form>
+    <div class="internal" id="photoBox"></div>
     <div class="internal" id="internalBox"></div>`;
+  renderApproval(o.approval || null);
+  renderPhotos(o.photos || []);
   renderComments(o.comments || []);
   $("#btnPrint").onclick = () => window.open("/print/current", "_blank");
   $("#btnDelete").onclick = () => deleteOrder(o.number);
@@ -645,13 +739,24 @@ async function loadBotBox(o, sentNow){
     clearInterval(clientPoll);
     $("#botBox").innerHTML = `${sentNow ? `<div class="ok-line">✓ Клієнт підключився — бот уже надіслав йому PDF.</div>` : ""}
       <div>Клієнт <b>${esc(d.client)}</b> підключений до бота.</div>
-      <div class="send-row"><button class="primary" id="sendBot">Надіслати PDF через бота</button><span id="sendBotRes"></span></div>`;
+      <div class="send-row"><button class="primary" id="sendBot">Надіслати PDF через бота</button><span id="sendBotRes"></span></div>
+      <div class="send-row"><button id="sendApproval">📝 Надіслати на погодження</button><span id="approvalRes"></span></div>
+      <div class="sub">На погодження: клієнт отримає кошторис із кнопками «✅ Погоджую / ❌ Відмовляюсь», відповідь з'явиться в замовленні.
+        ${(o.photos || []).some(p => p.to_client) ? "Фото, позначені «клієнту», надсилаються разом із PDF." : ""}</div>`;
     $("#sendBot").onclick = async () => {
       $("#sendBot").disabled = true;
       try{
         const r = await api(`/api/orders/${encodeURIComponent(o.number)}/send-telegram`, {method: "POST"});
-        $("#sendBotRes").innerHTML = `<span class="ok-line">✓ Надіслано: ${esc(r.client)}</span>`;
+        $("#sendBotRes").innerHTML = `<span class="ok-line">✓ Надіслано: ${esc(r.client)}${r.photos ? ` (+ фото: ${r.photos})` : ""}</span>`;
       }catch(e){ $("#sendBotRes").textContent = e.message; $("#sendBot").disabled = false; }
+    };
+    $("#sendApproval").onclick = async () => {
+      $("#sendApproval").disabled = true;
+      try{
+        const r = await api(`/api/orders/${encodeURIComponent(o.number)}/send-approval`, {method: "POST"});
+        $("#approvalRes").innerHTML = `<span class="ok-line">✓ Надіслано на погодження</span>`;
+        if (currentOrder && currentOrder.number === o.number) renderApproval(r.approval);
+      }catch(e){ $("#approvalRes").textContent = e.message; $("#sendApproval").disabled = false; }
     };
     return;
   }
@@ -1136,8 +1241,32 @@ function renderSettingsForm(flash){
       <div><div class="form-err" id="formErr" hidden></div>
         <div class="form-actions"><button class="primary" type="submit">Зберегти</button></div></div>
     </form>
+    <div class="tools-sec"><h3>Прайс в Excel</h3>
+      <div class="sub">Вивантажте прайс, змініть ціни чи додайте рядки в Excel і завантажте назад. Рядки звіряються за кодом роботи й артикулом; рядки, яких немає у файлі, не видаляються.</div>
+      <div class="send-row"><button type="button" data-download="/api/catalog/export.xlsx">⬇ Вивантажити в Excel</button>
+        <button type="button" id="xlsxPick">⬆ Завантажити з Excel</button><input type="file" id="xlsxFile" accept=".xlsx" hidden></div>
+      <div id="xlsxResult"></div></div>
+    <div class="tools-sec"><h3>Резервна копія</h3>
+      <div class="sub">Архів із замовленнями (з кошиком), коментарями, фото, довідником і витратами.
+        ${BACKUP_CHAT ? "Щоночі о 03:00 копія автоматично надходить вам у Telegram." : TELEGRAM ? "Щоб щоночі отримувати копію в Telegram: напишіть боту в особисті /chatid і додайте цей ID як BACKUP_CHAT_ID у налаштуваннях сервера (Render → Environment)." : ""}</div>
+      <div class="send-row"><button type="button" data-download="/api/backup.zip">⬇ Завантажити архів</button>
+        ${BACKUP_CHAT ? `<button type="button" id="backupTg">📨 Надіслати в Telegram зараз</button>` : ""}<span id="backupRes" class="sub"></span></div></div>
     <div class="usage" id="usageBox"><h3>Витрати на Claude</h3><div class="sub">Завантаження…</div></div>`;
   loadUsage();
+  if ($("#backupTg")) $("#backupTg").onclick = async () => {
+    $("#backupTg").disabled = true; $("#backupRes").textContent = "Надсилаю…";
+    try{
+      const r = await api("/api/backup/telegram", {method: "POST"});
+      $("#backupRes").textContent = `✓ Надіслано (замовлень: ${r.orders}, фото: ${r.photos})`;
+    }catch(e){ $("#backupRes").textContent = e.message; }
+    $("#backupTg").disabled = false;
+  };
+  $("#xlsxPick").onclick = () => $("#xlsxFile").click();
+  $("#xlsxFile").onchange = async e => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (file) importExcel(file, false);
+  };
   $("#setForm").onsubmit = async e => {
     e.preventDefault();
     const body = {name: $("#sName").value, address: $("#sAddr").value, phone: $("#sPhone").value, inn: $("#sInn").value,
@@ -1146,6 +1275,35 @@ function renderSettingsForm(flash){
       $("#brand").textContent = catalogData.settings.name; document.title = catalogData.settings.name;
     }
   };
+}
+
+async function importExcel(file, apply){
+  const box = $("#xlsxResult");
+  box.innerHTML = `<div class="sub">${apply ? "Застосовую…" : "Перевіряю файл…"}</div>`;
+  let r;
+  try{
+    const resp = await fetch(`/api/catalog/import${apply ? "?apply=true" : ""}`, {method: "POST", body: file, credentials: "same-origin",
+                                                                              headers: {"Content-Type": "application/octet-stream"}});
+    r = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(r.error || `Помилка ${resp.status}`);
+  }catch(err){ box.innerHTML = `<div class="form-err">${esc(err.message)}</div>`; return; }
+  if (apply){
+    if (r.catalog) setCatalog(r.catalog);
+    catFlash = `Прайс оновлено: робіт ${r.operations.length}, запчастин ${r.parts.length}`;
+    showCatalog("settings");
+    return;
+  }
+  const row = x => `<div>${x.action === "new" ? "＋ нова" : "✎ змінено"} · <b>${esc(x.code)}</b> ${esc(x.name)} · ${num(x.price)} $${x.changes.length ? ` <span class="sub">(${x.changes.map(esc).join(", ")})</span>` : ""}</div>`;
+  const total = r.operations.length + r.parts.length;
+  box.innerHTML = `
+    ${total ? `<div class="import-list">${r.operations.length ? `<b>Роботи: ${r.operations.length}</b>${r.operations.map(row).join("")}` : ""}
+      ${r.parts.length ? `<b>Запчастини: ${r.parts.length}</b>${r.parts.map(row).join("")}` : ""}</div>` : `<div class="sub">Змін немає — прайс у файлі збігається з довідником.</div>`}
+    ${r.errors.length ? `<div class="form-err">Рядки з помилками (не буде застосовано):<div class="import-list">${r.errors.map(x => `<div>«${esc(x.sheet)}», рядок ${x.row}: ${esc(x.message)}</div>`).join("")}</div></div>` : ""}
+    ${total ? `<div class="send-row"><button type="button" class="primary" id="xlsxApply">Застосувати зміни (${total})</button><button type="button" id="xlsxCancel">Скасувати</button></div>` : ""}`;
+  if (total){
+    $("#xlsxApply").onclick = () => importExcel(file, true);
+    $("#xlsxCancel").onclick = () => { box.innerHTML = ""; };
+  }
 }
 
 async function loadUsage(){
@@ -1174,6 +1332,7 @@ $("#catTabs").onclick = e => { const v = e.target.dataset.view; if (v && catalog
 $("#closeCatalog").onclick = () => $("#catalogDlg").close();
 $("#catalogList").addEventListener("click", e => {
   const d = e.target.dataset;
+  if (d.download) return void (location.href = d.download);
   if (d.newOp !== undefined) return opForm(null);
   if (d.editOp) return opForm(d.editOp);
   if (d.newPart !== undefined) return partForm(null);
@@ -1201,6 +1360,8 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
     if (s.auth) $("#btnLogout").hidden = false;
     if (s.statuses) STATUSES = s.statuses;
     TELEGRAM = !!s.telegram;
+    BACKUP_CHAT = !!s.backup_chat;
+    if (s.photo_kinds) PHOTO_KINDS = s.photo_kinds;
     if (s.service && s.service.name){ $("#brand").textContent = s.service.name; document.title = s.service.name; }
     if (s.history.length) s.history.forEach(m => addMsg(m.role, m.text));
     const last = remembered();

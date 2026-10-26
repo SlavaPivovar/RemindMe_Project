@@ -137,7 +137,10 @@ class Catalog:
             raise CatalogError(f"{field}: лише латинські літери, цифри та дефіс, від 2 до 40 символів")
         return code
 
-    def save_operation(self, data: dict, create: bool) -> Operation:
+    def make_operation(self, data: dict, parts: dict | None = None) -> Operation:
+        """Перевірити дані роботи й зібрати Operation (без запису). parts — довідник запчастин,
+        з яким звіряються артикули (за замовчуванням поточний)."""
+        parts_index = self.parts if parts is None else parts
         code = self._code(data.get("code"), "Код роботи")
         models = data.get("models") or []
         if not isinstance(models, list) or not models:
@@ -145,22 +148,26 @@ class Catalog:
         models = ["*"] if "*" in models else [m for m in MODEL_CODES if m in models]
         if not models:
             raise CatalogError("Невідома модель")
-        parts = data.get("parts") or []
-        if not isinstance(parts, list):
+        part_nos = data.get("parts") or []
+        if not isinstance(part_nos, list):
             raise CatalogError("Запчастини мають бути списком артикулів")
-        parts = list(dict.fromkeys(str(p).strip().upper() for p in parts if str(p).strip()))
-        unknown = [p for p in parts if p not in self.parts]
+        part_nos = list(dict.fromkeys(str(p).strip().upper() for p in part_nos if str(p).strip()))
+        unknown = [p for p in part_nos if p not in parts_index]
         if unknown:
             raise CatalogError(f"Немає таких запчастин у довіднику: {', '.join(unknown)}")
-        op = Operation(
+        return Operation(
             code=code,
             name=self._text(data.get("name"), "Назва", 200),
             price=self._number(data.get("price"), "Ціна", 0, 1_000_000),
             models=models,
-            parts=parts,
+            parts=part_nos,
             category=self._text(data.get("category"), "Розділ", 60),
             interval=self._text(data.get("interval"), "Інтервал", 200, required=False),
         )
+
+    def save_operation(self, data: dict, create: bool) -> Operation:
+        op = self.make_operation(data)
+        code = op.code
         with self.lock:
             exists = code in self.operations
             if create and exists:
@@ -176,14 +183,18 @@ class Catalog:
                 raise KeyError(code)
             self._commit(operations={k: v for k, v in self.operations.items() if k != code})
 
-    def save_part(self, data: dict, create: bool) -> Part:
-        part_no = self._code(data.get("part_no"), "Артикул")
-        part = Part(
-            part_no=part_no,
+    def make_part(self, data: dict) -> Part:
+        """Перевірити дані запчастини й зібрати Part (без запису)."""
+        return Part(
+            part_no=self._code(data.get("part_no"), "Артикул"),
             name=self._text(data.get("name"), "Назва", 200),
             price=self._number(data.get("price"), "Ціна", 0, 1_000_000),
             unit=self._text(data.get("unit") or "шт", "Одиниця", 10),
         )
+
+    def save_part(self, data: dict, create: bool) -> Part:
+        part = self.make_part(data)
+        part_no = part.part_no
         with self.lock:
             exists = part_no in self.parts
             if create and exists:
@@ -202,6 +213,13 @@ class Catalog:
                 raise CatalogError(f"Запчастина використовується в роботах: {', '.join(used)}. "
                                    "Спершу приберіть її з цих робіт.")
             self._commit(parts={k: v for k, v in self.parts.items() if k != part_no})
+
+    def merge_items(self, operations: list[Operation], parts: list[Part]) -> None:
+        """Додати або замінити разом кілька перевірених робіт і запчастин (імпорт з Excel).
+        Нічого не видаляє; записується одним файлом — або все, або нічого."""
+        with self.lock:
+            self._commit(operations={**self.operations, **{o.code: o for o in operations}},
+                         parts={**self.parts, **{p.part_no: p for p in parts}})
 
     def update_settings(self, data: dict) -> None:
         service = {
