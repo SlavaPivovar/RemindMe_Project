@@ -1,0 +1,12 @@
+orders/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+build/
+/catalog.json
+/catalog.tmp
+/.auth_secret
+/usage.jsonl
+/telegram.json
