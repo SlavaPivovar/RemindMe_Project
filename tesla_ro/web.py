@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import hashlib
 import hmac
@@ -21,14 +22,20 @@ import httpx
 import qrcode
 import qrcode.image.svg
 from anthropic.lib.tools import ToolError
+from fastapi.concurrency import run_in_threadpool
 from fastapi import Cookie, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from .assistant import MODEL, RepairOrderAssistant
+from .backup import TELEGRAM_LIMIT, backup_filename, make_backup
 from .catalog import DEFAULT_CATALOG, MODEL_CODES, Catalog, CatalogError
 from .comments import CommentError, CommentStore
+from .excel import ExcelError, export_catalog, import_catalog
 from .order import STATUSES, OrderStore, StatusError
+from .photos import KINDS as PHOTO_KINDS
+from .photos import PhotoError as GalleryError
+from .photos import PhotoStore
 from .render import PdfUnavailable, pdf_filename, render_html, render_pdf
 from .tools import OrderSession
 from .usage import UsageLedger
@@ -99,6 +106,17 @@ class TextIn(BaseModel):
     text: str
 
 
+class GalleryPhotoIn(BaseModel):
+    image: str  # data:image/jpeg;base64,...
+    kind: str = "до"
+    author: str = ""
+
+
+class GalleryPhotoEditIn(BaseModel):
+    kind: str | None = None
+    to_client: bool | None = None
+
+
 class CommentIn(BaseModel):
     text: str
     author: str = ""
@@ -154,12 +172,16 @@ def create_app(
     store = OrderStore(orders_dir)
     ledger = UsageLedger(usage_path)
     comments = CommentStore(orders_dir)
+    photos = PhotoStore(orders_dir)
     # telegram — фабрика (store, comments) -> TelegramBot | None; бот бачить кожне збереження замовлення.
     bot = telegram(store, comments) if telegram else None
     if bot:
         store.listeners.append(bot.order_saved)
         bot.render_pdf = lambda order: render_pdf(order, catalog.service)
         bot.service_name = catalog.service.get("name", "")
+        bot.service_address = catalog.service.get("address", "")
+        bot.photos = photos
+        bot.make_backup = lambda: backup(TELEGRAM_LIMIT)
     client = client or anthropic.Anthropic()
     conversations: dict[str, Conversation] = {}
     conversations_lock = threading.Lock()
@@ -241,6 +263,7 @@ def create_app(
     def new_conversation() -> Conversation:
         session = OrderSession(catalog, store)
         session.comments = comments
+        session.extras = extras
         return Conversation(session, RepairOrderAssistant(session, client=client, model=model, effort=effort))
 
     def conversation(sid: str | None, response: Response) -> Conversation:
@@ -275,7 +298,8 @@ def create_app(
                 if text:
                     history.append({"role": "assistant", "text": text})
         return {"order": conv.session.snapshot(), "history": history, "service": catalog.service,
-                "statuses": STATUSES, "telegram": bot is not None,
+                "statuses": STATUSES, "telegram": bot is not None, "photo_kinds": PHOTO_KINDS,
+                "backup_chat": bool(bot and bot.backup_chat_id),
                 "auth": password is not None}
 
     @app.post("/api/chat")
@@ -574,7 +598,52 @@ def create_app(
         result = edit(catalog.update_settings, body)
         if bot:
             bot.service_name = catalog.service.get("name", "")
+            bot.service_address = catalog.service.get("address", "")
         return result
+
+    # --- прайс в Excel і резервна копія ---
+
+    @app.get("/api/catalog/export.xlsx")
+    def catalog_export():
+        name = quote(f"prais-{time.strftime('%Y-%m-%d')}.xlsx")
+        return Response(export_catalog(catalog),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{name}"})
+
+    @app.post("/api/catalog/import")
+    async def catalog_import(request: Request, apply: bool = False):
+        data = await request.body()
+        if not data:
+            raise HTTPException(400, "Файл порожній")
+        if len(data) > 10 * 1024 * 1024:
+            raise HTTPException(400, "Файл завеликий (до 10 МБ)")
+        try:
+            preview = await run_in_threadpool(import_catalog, catalog, data, apply)
+        except ExcelError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except OSError:
+            raise HTTPException(500, "Не вдалося зберегти довідник на диск") from None
+        return {**preview, "catalog": catalog_view() if apply else None}
+
+    def backup(max_bytes: int | None = None):
+        extra = [p for p in (catalog.path, ledger.path, bot.links_path if bot else None) if p]
+        data, info = make_backup(Path(orders_dir), extra, max_bytes)
+        return data, info, backup_filename(catalog.service.get("name", ""))
+
+    @app.get("/api/backup.zip")
+    def backup_download():
+        data, _, filename = backup()
+        return Response(data, media_type="application/zip",
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
+
+    @app.post("/api/backup/telegram")
+    def backup_telegram():
+        if not bot or not bot.backup_chat_id:
+            raise HTTPException(503, "Не задано BACKUP_CHAT_ID — куди надсилати копію")
+        try:
+            return bot.send_backup()
+        except (TelegramError, httpx.HTTPError) as exc:
+            raise HTTPException(502, f"Telegram: {exc}") from None
 
     def matches(o, q: str) -> bool:
         """Пошук за номером, VIN, держномером, ПІБ або телефоном (телефон — лише за цифрами)."""
@@ -665,6 +734,21 @@ def create_app(
         return {"link": link, "qr_svg": qr, "client": client["name"] if client else None,
                 "has_phone": bot.phone_key(order.customer.phone) is not None}
 
+    @app.post("/api/orders/{number}/send-approval")
+    def send_approval(number: str):
+        order = saved_order_for_client(number)
+        if not order.labor and not order.parts:
+            raise HTTPException(400, "У кошторисі ще немає робіт і запчастин")
+        try:
+            approval = bot.send_for_approval(order)
+        except ClientNotConnected:
+            raise HTTPException(409, "Клієнт ще не підключив бота — покажіть йому QR-код або надішліть посилання") from None
+        except PdfUnavailable:
+            raise HTTPException(503, "PDF недоступний на сервері") from None
+        except (TelegramError, httpx.HTTPError) as exc:
+            raise HTTPException(502, f"Telegram: {exc}") from None
+        return {"approval": approval}
+
     @app.post("/api/orders/{number}/send-telegram")
     def send_telegram(number: str):
         order = saved_order_for_client(number)
@@ -676,7 +760,7 @@ def create_app(
             raise HTTPException(503, "PDF недоступний на сервері") from None
         except (TelegramError, httpx.HTTPError) as exc:
             raise HTTPException(502, f"Telegram: {exc}") from None
-        return {"sent": True, "client": client["name"]}
+        return {"sent": True, "client": client["name"], "photos": client.get("photos", 0)}
 
     @app.get("/print/current", response_class=HTMLResponse)
     def print_current(response: Response, tesla_ro_sid: str | None = Cookie(None)):
@@ -713,6 +797,57 @@ def create_app(
         if bot:
             bot.comment_added(number, comment)
         return comments.list(number)
+
+    # --- фото до замовлення ---
+
+    def extras(number: str) -> dict:
+        return {"photos": photos.list(number), "approval": bot.approval(number) if bot else None}
+
+    @app.get("/api/orders/{number}/extras")
+    def order_extras(number: str):
+        return {**extras(number), "comments": comments.list(number)}
+
+    def saved_order(number: str):
+        try:
+            return store.load(number)
+        except FileNotFoundError:
+            raise HTTPException(404, "Замовлення-наряд ще не збережено — спершу заповніть його") from None
+
+    @app.post("/api/orders/{number}/photos")
+    def add_gallery_photo(number: str, body: GalleryPhotoIn):
+        saved_order(number)
+        try:
+            media_type, data = parse_data_url(body.image)
+            photos.add(number, base64.b64decode(data), media_type, body.kind, body.author or "Співробітник")
+        except (PhotoError, GalleryError) as exc:
+            raise HTTPException(400, str(exc)) from None
+        return photos.list(number)
+
+    @app.patch("/api/orders/{number}/photos/{photo_id}")
+    def edit_gallery_photo(number: str, photo_id: str, body: GalleryPhotoEditIn):
+        try:
+            photos.update(number, photo_id, body.kind, body.to_client)
+        except GalleryError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(404, "Фото не знайдено") from None
+        return photos.list(number)
+
+    @app.delete("/api/orders/{number}/photos/{photo_id}")
+    def delete_gallery_photo(number: str, photo_id: str):
+        try:
+            photos.delete(number, photo_id)
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(404, "Фото не знайдено") from None
+        return photos.list(number)
+
+    @app.get("/photos/{number}/{photo_id}")
+    def gallery_photo(number: str, photo_id: str):
+        try:
+            path = photos.path(number, photo_id)
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(404, "Фото не знайдено") from None
+        return FileResponse(path, headers={"Cache-Control": "private, max-age=86400"})
 
     app.state.telegram = bot
     return app

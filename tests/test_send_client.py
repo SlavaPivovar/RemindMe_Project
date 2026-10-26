@@ -93,7 +93,7 @@ def test_client_connects_and_gets_pdf(tmp_path, session):
     # наступне замовлення того ж клієнта (телефон в іншому форматі) — одним натисканням
     number2 = saved(session, phone="067 123 45 67")
     r2 = web.post(f"/api/orders/{number2}/send-telegram")
-    assert r2.status_code == 200 and r2.json() == {"sent": True, "client": "Петро (@petro)"}
+    assert r2.status_code == 200 and r2.json() == {"sent": True, "client": "Петро (@petro)", "photos": 0}
     assert len(fake.sent("sendDocument")) == 2
 
 

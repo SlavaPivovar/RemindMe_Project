@@ -41,6 +41,7 @@ class OrderSession:
         self.store = store
         self.order: RepairOrder | None = None
         self.comments = None  # CommentStore: внутрішні коментарі для панелі (див. web.py)
+        self.extras = None  # number -> dict: фото, погодження тощо для панелі (див. web.py)
 
     @property
     def _order(self) -> RepairOrder:
@@ -439,6 +440,8 @@ class OrderSession:
         data["history"] = [self._visit_info(o) for o in self.store.history(self.order.vehicle.vin,
                                                                            exclude=self.order.number)[:10]]
         data["comments"] = self.comments.list(self.order.number) if self.comments else []
+        if self.extras:
+            data.update(self.extras(self.order.number))
         return data
 
     def get_order(self) -> str:
