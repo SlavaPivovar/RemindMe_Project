@@ -31,7 +31,7 @@ import httpx
 
 from .clients import phone_key as _phone_key
 from .comments import CommentError, CommentStore
-from .order import DRAFT, OrderStore, RepairOrder, now_str
+from .order import DRAFT, STATUSES, OrderStore, RepairOrder, StatusError, now_str
 
 try:
     from zoneinfo import ZoneInfo
@@ -50,7 +50,14 @@ HELP = ("Я публікую сюди замовлення-наряди й зб�
         "• Або почніть повідомлення з номера: <code>ЗН-2026-00001 замінили колодки</code>.\n"
         "• Фото відповіддю на картку додається до фото замовлення (підпис «до», «після» чи "
         "«пошкодження» задає тип).\n"
-        "• /orders — замовлення в роботі\n• /order ЗН-2026-00001 — картка з коментарями")
+        "• Голосове відповіддю на картку — голосовий коментар (прослухати можна й на сайті).\n"
+        "• Кнопки під карткою: змінити статус і «👤 Беру собі» — стати відповідальним.\n"
+        "• /orders — замовлення в роботі\n• /my — мої замовлення\n"
+        "• /order ЗН-2026-00001 — картка з коментарями")
+NEXT_STATUS = {"прийнято": ("в роботі", "🔧 В роботу"), "в роботі": ("готово", "✅ Готово"),
+               "готово": ("видано", "🏁 Видано")}
+SUMMARY_HOUR = 20  # о котрій (за Києвом) надсилати власнику підсумок дня
+STALE_DAYS = 2  # «довго в роботі» — понад стільки днів
 READY = "готово"
 BACKUP_HOUR = 3  # о котрій (за Києвом) щоночі надсилати резервну копію
 APPROVE, DECLINE = "y", "n"
@@ -153,6 +160,7 @@ class TelegramBot:
         self.photos = None  # PhotoStore; задає web.py
         self.backup_chat_id = 0  # особистий чат власника для резервних копій (BACKUP_CHAT_ID)
         self.make_backup = None  # () -> (дані zip, info, ім'я файлу); задає web.py
+        self.on_order_changed = None  # order -> None: зміна з Telegram (статус, відповідальний); задає web.py
         self._username: str | None = None
 
     # --- зв'язок повідомлень із замовленнями (файл на диску) ---
@@ -170,6 +178,7 @@ class TelegramBot:
                 "approvals": data.get("approvals", {}),
                 "ready_sent": data.get("ready_sent", {}),  # кому вже написали «автомобіль готовий»
                 "backup_date": data.get("backup_date", ""),
+                "summary_date": data.get("summary_date", ""),
                 "broadcasts": data.get("broadcasts", [])}  # журнал розсилок
 
     def _save_links(self) -> None:
@@ -227,16 +236,29 @@ class TelegramBot:
         if order.parts:
             lines.append("📦 Запчастини: " + short_list([line.name for line in order.parts]))
         lines.append(f"💵 Разом: {money(t['total'])} {escape(order.currency)}")
+        if order.assignee:
+            lines.append(f"👤 Відповідальний: {escape(order.assignee)}")
         count = self.comments.count(order.number)
         if count:
             lines.append(f"💬 Коментарів: {count}")
         lines.append("<i>Відповідайте на це повідомлення, щоб залишити коментар.</i>")
         return "\n".join(lines)[:4000]
 
-    def _send(self, text: str, reply_to: int | None = None) -> int:
+    @staticmethod
+    def card_markup(order: RepairOrder) -> dict:
+        """Кнопки під карткою: наступний статус і «Беру собі» (для замовлень у роботі)."""
+        row = []
+        if order.status in NEXT_STATUS:
+            status, label = NEXT_STATUS[order.status]
+            row.append({"text": label, "callback_data": f"st:{order.number}:{STATUSES.index(status)}"})
+        if order.status in ACTIVE:
+            row.append({"text": "👤 Беру собі", "callback_data": f"me:{order.number}"})
+        return {"inline_keyboard": [row] if row else []}
+
+    def _send(self, text: str, reply_to: int | None = None, reply_markup: dict | None = None) -> int:
         result = self.api.call("sendMessage", chat_id=self.chat_id, text=text, parse_mode="HTML",
                                reply_parameters={"message_id": reply_to, "allow_sending_without_reply": True}
-                               if reply_to else None)
+                               if reply_to else None, reply_markup=reply_markup)
         return result["message_id"]
 
     def _sync_order(self, number: str) -> None:
@@ -250,25 +272,33 @@ class TelegramBot:
         link = self.links["orders"].get(number)
         if link is None and order.status == DRAFT:
             return  # чернетки в групу не потрапляють
-        text = self.card(order)
+        text, markup = self.card(order), self.card_markup(order)
         if link is None:
-            message_id = self._send(text)
-            self.links["orders"][number] = {"message_id": message_id, "status": order.status, "text": text}
+            message_id = self._send(text, reply_markup=markup)
+            self.links["orders"][number] = {"message_id": message_id, "status": order.status, "text": text,
+                                            "markup": markup, "assignee": order.assignee}
             self._remember(message_id, number)
             return
-        if text != link["text"]:
+        if text != link["text"] or markup != link.get("markup"):
             try:
                 self.api.call("editMessageText", chat_id=self.chat_id, message_id=link["message_id"], text=text,
-                              parse_mode="HTML")
+                              parse_mode="HTML", reply_markup=markup)
             except TelegramError as exc:
                 if "not modified" not in str(exc):
                     raise
-            link["text"] = text
+            link["text"], link["markup"] = text, markup
         if order.status != link["status"]:
             icon = STATUS_ICON.get(order.status, "📌")
-            reply = self._send(f"{icon} {escape(number)}: статус «<b>{escape(order.status)}</b>»", link["message_id"])
+            last = order.status_log[-1] if order.status_log else {}
+            by = f" · {escape(last['by'])}" if last.get("status") == order.status and last.get("by") else ""
+            reply = self._send(f"{icon} {escape(number)}: статус «<b>{escape(order.status)}</b>»{by}", link["message_id"])
             self._remember(reply, number)
             link["status"] = order.status
+        if order.assignee != link.get("assignee", ""):
+            if order.assignee:
+                self._remember(self._send(f"👤 {escape(number)}: відповідальний — <b>{escape(order.assignee)}</b>",
+                                          link["message_id"]), number)
+            link["assignee"] = order.assignee
 
     def _run_task(self, kind: str, number: str, payload) -> None:
         link = self.links["orders"].get(number)
@@ -337,6 +367,10 @@ class TelegramBot:
             self._list_active()
         elif command == "/order":
             self._show_order(text.split(maxsplit=1)[1] if " " in text else "")
+        elif command == "/my":
+            self._list_mine(msg.get("from", {}))
+        elif (msg.get("voice") or msg.get("audio")) and not command:
+            self._voice_from(msg, text)
         elif msg.get("photo") and not command:
             self._photo_from(msg, text)
         elif text and not command:
@@ -385,6 +419,28 @@ class TelegramBot:
         self._remember(msg["message_id"], number)
         self._react(msg["message_id"])
 
+    def _voice_from(self, msg: dict, text: str) -> None:
+        number, _ = self._order_for(msg, text)
+        if number is None:
+            return
+        media = msg.get("voice") or msg.get("audio")
+        ext = {"audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/x-m4a": "m4a"}.get(media.get("mime_type", ""), "ogg")
+        duration = int(media.get("duration") or 0)
+        try:
+            name = self.comments.save_voice(number, self.api.download(media["file_id"]), ext)
+            self.comments.add(number, self.author(msg.get("from", {})),
+                              f"🎤 Голосове повідомлення {duration // 60}:{duration % 60:02d}" + (f" — {text}" if text else ""),
+                              source="telegram", voice={"file": name, "duration": duration})
+        except CommentError as exc:
+            self.api.call("sendMessage", chat_id=self.chat_id, text=str(exc),
+                          reply_parameters={"message_id": msg["message_id"]})
+            return
+        self._remember(msg["message_id"], number)
+        with self._lock:
+            self._dirty.add(number)
+        self._react(msg["message_id"])
+        self._wake.set()
+
     def _comment_from(self, msg: dict, text: str) -> None:
         number, text = self._order_for(msg, text)
         if number is None or not text:
@@ -401,16 +457,75 @@ class TelegramBot:
         self._react(msg["message_id"])
         self._wake.set()
 
+    @staticmethod
+    def _order_row(o: RepairOrder) -> str:
+        return (f"{STATUS_ICON[o.status]} <b>{escape(o.number)}</b> · {escape(o.status)} · "
+                f"{escape(' '.join(x for x in (o.vehicle.model, o.vehicle.plate) if x) or '—')} · "
+                f"{escape(o.customer.name or '—')}" + (f" · 👤 {escape(o.assignee)}" if o.assignee else ""))
+
     def _list_active(self) -> None:
         active = [o for o in self.store.list() if o.status in ACTIVE]
         if not active:
             text = "Зараз немає замовлень-нарядів у роботі."
         else:
-            rows = [f"{STATUS_ICON[o.status]} <b>{escape(o.number)}</b> · {escape(o.status)} · "
-                    f"{escape(' '.join(x for x in (o.vehicle.model, o.vehicle.plate) if x) or '—')} · "
-                    f"{escape(o.customer.name or '—')}" for o in active]
-            text = "Замовлення-наряди в роботі:\n" + "\n".join(rows)
+            text = "Замовлення-наряди в роботі:\n" + "\n".join(self._order_row(o) for o in active)
         self.api.call("sendMessage", chat_id=self.chat_id, text=text[:4000], parse_mode="HTML")
+
+    def _is_mine(self, order: RepairOrder, sender: dict) -> bool:
+        if order.assignee_tg is not None:
+            return order.assignee_tg == sender.get("id")
+        return bool(order.assignee) and order.assignee == self.author(sender)
+
+    def _list_mine(self, sender: dict) -> None:
+        mine = [o for o in self.store.list() if o.status in ACTIVE and self._is_mine(o, sender)]
+        name = escape(self.author(sender))
+        text = (f"Замовлення-наряди, де {name} — відповідальний:\n" + "\n".join(self._order_row(o) for o in mine)
+                if mine else f"{name}: зараз за вами немає замовлень у роботі. Натисніть «👤 Беру собі» під карткою.")
+        self.api.call("sendMessage", chat_id=self.chat_id, text=text[:4000], parse_mode="HTML")
+
+    # --- кнопки під карткою в групі ---
+
+    def _staff_callback(self, query: dict, parts: list[str]) -> None:
+        msg = query.get("message") or {}
+        if msg.get("chat", {}).get("id") != self.chat_id or not self.chat_id:
+            self.api.call("answerCallbackQuery", callback_query_id=query["id"])
+            return
+        sender = query.get("from", {})
+        who = self.author(sender)
+        number = parts[1]
+        try:
+            order = self.store.load(number)
+        except FileNotFoundError:
+            self.api.call("answerCallbackQuery", callback_query_id=query["id"],
+                          text="Замовлення-наряд не знайдено (можливо, видалено)", show_alert=True)
+            return
+        if parts[0] == "st":
+            target = STATUSES[int(parts[2])] if len(parts) == 3 and parts[2].isdigit() and int(parts[2]) < len(STATUSES) else ""
+            if not target or order.status == target:
+                answer = f"Статус уже «{order.status}»"
+            else:
+                try:
+                    order.set_status(target, by=who)
+                except StatusError as exc:
+                    self.api.call("answerCallbackQuery", callback_query_id=query["id"], text=str(exc)[:190],
+                                  show_alert=True)
+                    return
+                answer = f"Статус: {target}"
+        else:  # me — стати відповідальним
+            if order.assignee_tg == sender.get("id") and order.assignee:
+                answer = "Ви вже відповідальний за це замовлення"
+                order = None
+            else:
+                order.assignee, order.assignee_tg = who, sender.get("id")
+                answer = f"Ви відповідальний за {number}"
+        if order is not None:
+            self.store.save(order)  # обробник збереження оновить картку й напише в групу
+            if self.on_order_changed:
+                try:
+                    self.on_order_changed(order)
+                except Exception:
+                    log.exception("Помилка обробника зміни замовлення")
+        self.api.call("answerCallbackQuery", callback_query_id=query["id"], text=answer)
 
     def _show_order(self, number: str) -> None:
         number = number.strip().upper()
@@ -521,6 +636,9 @@ class TelegramBot:
         data = query.get("data") or ""
         msg = query.get("message") or {}
         parts = data.split(":")
+        if parts[0] in ("st", "me") and len(parts) >= 2:
+            self._staff_callback(query, parts)
+            return
         if len(parts) != 3 or parts[0] != "ap":
             self.api.call("answerCallbackQuery", callback_query_id=query["id"])
             return
@@ -656,12 +774,69 @@ class TelegramBot:
             self.links["backup_date"] = (datetime.now(KYIV) if KYIV else datetime.now()).strftime("%Y-%m-%d")
             self._save_links()
 
-    def _backup_loop(self) -> None:
-        while not self._stop.is_set():
+    # --- підсумок дня власнику ---
+
+    def daily_summary(self, day: datetime | None = None) -> str:
+        day = day or datetime.now()  # той самий годинник, що й у журналі статусів (на сервері — київський час)
+        today = day.strftime("%d.%m.%Y")
+        orders = self.store.list()
+        events = {s: [] for s in ("прийнято", "готово", "видано")}
+        for o in orders:
+            for e in o.status_log:
+                if e.get("status") in events and e.get("at", "").startswith(today):
+                    events[e["status"]].append(o)
+        revenue = sum((o.totals()["total"] for o in {o.number: o for o in events["видано"]}.values()), 0)
+        active = [o for o in orders if o.status in ACTIVE]
+        now = day
+        stale = []
+        for o in orders:
+            if o.status != "в роботі":
+                continue
+            since = next((e["at"] for e in reversed(o.status_log) if e.get("status") == "в роботі"), "")
             try:
-                self.backup_tick()
-            except Exception:
-                log.exception("Telegram: резервна копія")
+                days = (now - datetime.strptime(since, "%d.%m.%Y %H:%M")).days
+            except ValueError:
+                continue
+            if days >= STALE_DAYS:
+                stale.append((days, o))
+        pending = [n for n, a in self.links["approvals"].items() if a.get("status") == "pending"]
+        load: dict[str, int] = {}
+        for o in active:
+            load[o.assignee or "без відповідального"] = load.get(o.assignee or "без відповідального", 0) + 1
+
+        unique = lambda items: len({o.number for o in items})  # noqa: E731
+        lines = [f"📊 <b>Підсумок дня {today}</b>" + (f" · {escape(self.service_name)}" if self.service_name else ""),
+                 f"📥 Прийнято: {unique(events['прийнято'])}",
+                 f"✅ Готово: {unique(events['готово'])}",
+                 f"🏁 Видано: {unique(events['видано'])} · на суму <b>{money(revenue)} $</b>",
+                 f"🔧 Зараз у роботі: {len(active)}"]
+        if load:
+            lines.append("👤 " + "; ".join(f"{escape(k)}: {v}" for k, v in sorted(load.items(), key=lambda x: -x[1])))
+        if pending:
+            lines.append(f"📝 Чекають погодження клієнтом: {len(pending)} — " + ", ".join(escape(n) for n in pending[:10]))
+        if stale:
+            lines.append(f"⏰ Довго в роботі (понад {STALE_DAYS} дн.):")
+            lines += [f"• {escape(o.number)} · {days} дн. · "
+                      f"{escape(' '.join(x for x in (o.vehicle.model, o.vehicle.plate) if x) or '—')}"
+                      f" · 👤 {escape(o.assignee or '—')}" for days, o in sorted(stale, key=lambda x: -x[0])[:15]]
+        return "\n".join(lines)[:4000]
+
+    def summary_tick(self) -> None:
+        now = datetime.now()
+        if not self.backup_chat_id or now.hour < SUMMARY_HOUR or self.links["summary_date"] == now.strftime("%Y-%m-%d"):
+            return
+        self.api.call("sendMessage", chat_id=self.backup_chat_id, text=self.daily_summary(now), parse_mode="HTML")
+        with self._lock:
+            self.links["summary_date"] = now.strftime("%Y-%m-%d")
+            self._save_links()
+
+    def _schedule_loop(self) -> None:
+        while not self._stop.is_set():
+            for name, tick in (("резервна копія", self.backup_tick), ("підсумок дня", self.summary_tick)):
+                try:
+                    tick()
+                except Exception:
+                    log.exception("Telegram: %s", name)
             self._stop.wait(600)
 
     def _note_in_group(self, number: str, text: str) -> None:
@@ -674,6 +849,12 @@ class TelegramBot:
 
     def _private(self, msg: dict, text: str, command: str) -> None:
         chat_id = msg["chat"]["id"]
+        if command == "/today":
+            if self.backup_chat_id and chat_id == self.backup_chat_id:
+                self.api.call("sendMessage", chat_id=chat_id, text=self.daily_summary(), parse_mode="HTML")
+            else:
+                self.api.call("sendMessage", chat_id=chat_id, text="Підсумок дня надсилається лише власнику.")
+            return
         if command == "/backup":
             if not self.backup_chat_id or chat_id != self.backup_chat_id:
                 self.api.call("sendMessage", chat_id=chat_id, text=(
@@ -735,7 +916,7 @@ class TelegramBot:
         threading.Thread(target=self._sender_loop, name="telegram-send", daemon=True).start()
         threading.Thread(target=self._poll_loop, name="telegram-poll", daemon=True).start()
         if self.backup_chat_id:
-            threading.Thread(target=self._backup_loop, name="telegram-backup", daemon=True).start()
+            threading.Thread(target=self._schedule_loop, name="telegram-schedule", daemon=True).start()
 
     def stop(self) -> None:
         self._stop.set()

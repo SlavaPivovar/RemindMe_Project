@@ -4,11 +4,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOST=0.0.0.0 \
     PORT=8000 \
-    ORDERS_DIR=/data/orders
+    ORDERS_DIR=/data/orders \
+    TZ=Europe/Kyiv
 
 # Pango/HarfBuzz — для PDF (WeasyPrint); DejaVu — шрифт із кирилицею.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-dejavu-core tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
