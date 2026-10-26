@@ -208,11 +208,6 @@ button.danger-lite{color:var(--accent)}
     <div class="log" id="log"></div>
     <div class="hints" id="hints">
       <button data-manual>📝 Заповнити вручну, без помічника</button>
-      <button>Нове замовлення: Іваненко Іван, +380 67 000 00 00, VIN 5YJ3E1EA9LF000316, пробіг 48 000 км</button>
-      <button>Скриплять гальма спереду</button>
-      <button>Не працює кондиціонер</button>
-      <button>Покажи підсумок</button>
-      <button>Збережи замовлення-наряд</button>
     </div>
     <form class="composer" id="composer">
       <textarea id="input" rows="2" placeholder="Клієнт, автомобіль, скарги… (Enter — надіслати, Shift+Enter — новий рядок)"></textarea>
@@ -862,11 +857,7 @@ $("#composer").addEventListener("submit", e => { e.preventDefault(); send($("#in
 $("#input").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); send($("#input").value); }
 });
-$("#hints").addEventListener("click", e => {
-  if (e.target.tagName !== "BUTTON") return;
-  if (e.target.dataset.manual !== undefined) return newManualOrder();
-  send(e.target.textContent);
-});
+$("#hints").addEventListener("click", e => { if (e.target.dataset.manual !== undefined) newManualOrder(); });
 $("#btnOrders").onclick = showOrders;
 $("#btnLogout").onclick = () => { location.href = "/logout"; };
 $("#closeDlg").onclick = () => $("#ordersDlg").close();
