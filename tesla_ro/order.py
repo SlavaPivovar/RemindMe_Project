@@ -104,10 +104,12 @@ class RepairOrder:
     currency: str = "$"
     vat_percent: float = 0
     prices_include_vat: bool = True
-    status_log: list[dict] = field(default_factory=list)  # [{"status": ..., "at": "дд.мм.рррр гг:хх"}]
+    status_log: list[dict] = field(default_factory=list)  # [{"status": ..., "at": "дд.мм.рррр гг:хх", "by": хто}]
+    assignee: str = ""  # відповідальний майстер
+    assignee_tg: int | None = None  # його Telegram id, якщо призначився кнопкою в групі
     ai_usage: dict = field(default_factory=dict)  # витрати на Claude по цьому замовленню (див. usage.py)
 
-    def set_status(self, status: str) -> None:
+    def set_status(self, status: str, by: str = "") -> None:
         status = LEGACY_STATUSES.get(status.strip().lower(), status.strip().lower())
         if status not in STATUSES:
             raise StatusError(f"Невідомий статус «{status}». Можливі: {', '.join(STATUSES)}")
@@ -116,7 +118,7 @@ class RepairOrder:
             raise StatusError(f"Не можна встановити статус «{status}»: не заповнено — {', '.join(missing)}")
         if status != self.status:
             self.status = status
-            self.status_log.append({"status": status, "at": now_str()})
+            self.status_log.append({"status": status, "at": now_str(), **({"by": by} if by else {})})
 
     def totals(self) -> dict[str, Decimal]:
         labor = sum((line.total for line in self.labor), Decimal("0"))

@@ -76,6 +76,11 @@ class PhotoIn(BaseModel):
 
 class StatusIn(BaseModel):
     status: str
+    by: str = ""  # хто змінив (ім'я, яке співробітник указав на сайті)
+
+
+class AssigneeIn(BaseModel):
+    name: str = ""
 
 
 class LineIn(BaseModel):
@@ -311,6 +316,7 @@ def create_app(
         return {"order": conv.session.snapshot(), "history": history, "service": catalog.service,
                 "statuses": STATUSES, "telegram": bot is not None, "photo_kinds": PHOTO_KINDS,
                 "backup_chat": bool(bot and bot.backup_chat_id),
+                "assignees": sorted({o.assignee for o in store.list() if o.assignee}),
                 "auth": password is not None}
 
     @app.post("/api/chat")
@@ -451,7 +457,7 @@ def create_app(
             raise HTTPException(409, "Помічник ще відповідає — спробуйте за мить")
         try:
             try:
-                conv.session.order.set_status(body.status)
+                conv.session.order.set_status(body.status, by=body.by.strip()[:80])
             except StatusError as exc:
                 raise HTTPException(400, str(exc)) from None
             try:
@@ -461,6 +467,41 @@ def create_app(
         finally:
             conv.lock.release()
         return {"order": conv.session.snapshot()}
+
+    @app.put("/api/order/assignee")
+    def set_assignee(body: AssigneeIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+        name = " ".join(body.name.split())[:80]
+
+        def action():
+            order = conv.session.order
+            if name != order.assignee:
+                order.assignee, order.assignee_tg = name, None
+                conv.session._autosave()
+        return edit_order(conv, action, f"відповідальний: {name or 'не призначено'}")
+
+    def sync_open_orders(order) -> None:
+        """Зміну з Telegram (статус, відповідальний) переносимо у відкриті на сайті копії замовлення,
+        інакше наступне автозбереження з браузера повернуло б старе."""
+        with conversations_lock:
+            sessions = [c.session for c in conversations.values()]
+        for session in sessions:
+            current = session.order
+            if current is not None and current.number == order.number and current is not order:
+                current.status, current.status_log = order.status, list(order.status_log)
+                current.assignee, current.assignee_tg = order.assignee, order.assignee_tg
+
+    if bot:
+        bot.on_order_changed = sync_open_orders
+
+    @app.get("/voice/{number}/{name}")
+    def voice(number: str, name: str):
+        try:
+            path = comments.voice_path(number, name)
+        except (FileNotFoundError, CommentError):
+            raise HTTPException(404, "Запис не знайдено") from None
+        media = {".mp3": "audio/mpeg", ".m4a": "audio/mp4"}.get(path.suffix, "audio/ogg")
+        return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=86400"})
 
     def restart(conv: Conversation) -> None:
         """Почати з чистого аркуша: нова розмова з помічником без замовлення-наряду."""
@@ -876,7 +917,11 @@ def create_app(
 
     @app.get("/api/orders/{number}/extras")
     def order_extras(number: str):
-        return {**extras(number), "comments": comments.list(number)}
+        result = {**extras(number), "comments": comments.list(number)}
+        with contextlib.suppress(FileNotFoundError, ValueError):
+            saved = store.load(number)  # статус і відповідального могли змінити кнопками в Telegram
+            result.update(status=saved.status, assignee=saved.assignee)
+        return result
 
     def saved_order(number: str):
         try:
@@ -940,6 +985,10 @@ def load_secret(data_dir: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
+    # Час у замовленнях, коментарях і журналах — київський, навіть якщо сервер працює в UTC (Render).
+    os.environ.setdefault("TZ", "Europe/Kyiv")
+    if hasattr(time, "tzset"):
+        time.tzset()
     env = os.environ.get
     parser = argparse.ArgumentParser(description="Веб-інтерфейс помічника із замовлень-нарядів Tesla")
     parser.add_argument("--host", default=env("HOST", "127.0.0.1"))
