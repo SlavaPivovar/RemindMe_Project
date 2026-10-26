@@ -173,6 +173,21 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .tools-sec .send-row{margin:8px 0}
 .import-list{max-height:220px;overflow:auto;font-size:13px;margin:6px 0}
 .import-list div{padding:2px 0}
+.tg{font-size:12px;white-space:nowrap;color:var(--ok)}
+.tg.off{color:var(--muted)}
+tr.click{cursor:pointer}
+tr.click:hover td{background:var(--bg)}
+.client-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.client-head h3{margin:0;font-size:18px;text-transform:none;letter-spacing:0;color:var(--text)}
+.client-stats{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 14px}
+.client-stats div{background:var(--bg);border-radius:8px;padding:6px 12px;font-size:13px}
+.client-stats b{display:block;font-size:16px}
+.cars{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
+.car{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.car .sub{flex:1;min-width:160px}
+.bc-form textarea{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);min-height:120px;resize:vertical}
+.bc-list{max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px 10px;margin:6px 0 10px;font-size:13px}
+.bc-list label{display:flex;gap:6px;align-items:center;padding:3px 0}
 .send-sec{border-top:1px solid var(--line);padding:12px 0 4px}
 .send-sec:first-child{border-top:0;padding-top:4px}
 .send-sec h3{margin:0 0 6px}
@@ -207,8 +222,8 @@ button.danger-lite{color:var(--accent)}
   main > .card{display:none}
   main > .card.show{display:flex}
   .info{grid-template-columns:1fr}
-  #catalogList .hide-m,#orderBody .hide-m{display:none}
-  #catalogList .show-m{display:inline}
+  #catalogList .hide-m,#orderBody .hide-m,#clientsBody .hide-m{display:none}
+  #catalogList .show-m,#clientsBody .show-m{display:inline}
   #orderBody .show-m{display:block}
   #orderBody td.acts{white-space:nowrap}
   #catalogList th,#catalogList td{padding:6px 4px}
@@ -226,6 +241,7 @@ button.danger-lite{color:var(--accent)}
   <h1><span id="brand">DK-TeslaService</span> <span>· Замовлення-наряди</span></h1>
   <button id="btnCatalog" title="Довідник робіт">📚 <span class="label">Довідник</span></button>
   <button id="btnOrders" title="Збережені замовлення-наряди">📁 <span class="label">Збережені</span></button>
+  <button id="btnClients" title="База клієнтів">👥 <span class="label">Клієнти</span></button>
   <button id="btnNew" title="Почати нове замовлення-наряд">＋ <span class="label">Нове</span></button>
   <button id="btnLogout" title="Вийти" hidden>⎋ <span class="label">Вийти</span></button>
 </header>
@@ -274,6 +290,11 @@ button.danger-lite{color:var(--accent)}
     <div class="filter-chips" id="statusFilter"></div>
     <div id="ordersList"></div>
   </div>
+</dialog>
+
+<dialog id="clientsDlg">
+  <div class="dh"><h2 id="clientsTitle">Клієнти</h2><button id="closeClients">✕</button></div>
+  <div class="db" id="clientsBody">Завантаження…</div>
 </dialog>
 
 <script>
@@ -1055,6 +1076,160 @@ $("#input").addEventListener("keydown", e => {
 });
 $("#hints").addEventListener("click", e => { if (e.target.dataset.manual !== undefined) newManualOrder(); });
 $("#btnOrders").onclick = showOrders;
+
+// ---------- База клієнтів і розсилка ----------
+let clientsData = null, clientsQuery = "", clientsFilter = "";
+const CLIENT_FILTERS = [["", "усі"], ["tg", "📲 у Telegram"], ["6", "не були 6+ міс."], ["12", "не були 12+ міс."]];
+const BC_TEMPLATES = {
+  "Нагадування про ТО": "Добрий день, {ім'я}! Нагадуємо, що для {авто} настав час планового обслуговування. Запишіться до {сервіс}: {адреса}.",
+  "Сезонна заміна шин": "Добрий день, {ім'я}! Час сезонної заміни шин для {авто}. Чекаємо вас у {сервіс}: {адреса}.",
+  "Довільне": ""};
+const tgBadge = c => c.telegram ? (c.telegram.blocked ? `<span class="tg off" title="Клієнт заблокував бота">🚫 заблокував</span>`
+  : `<span class="tg" title="Підключився до бота ${esc(c.telegram.at)}">📲 Telegram</span>`) : "";
+const dateOnly = d => d ? esc(String(d).split(" ")[0]) : "—";
+
+function clientMatches(c){
+  if (clientsFilter === "tg" && !(c.telegram && !c.telegram.blocked)) return false;
+  if ((clientsFilter === "6" || clientsFilter === "12") && !(c.months != null && c.months >= Number(clientsFilter))) return false;
+  const words = clientsQuery.toLowerCase().split(/\s+/).filter(Boolean);
+  const digits = clientsQuery.replace(/\D/g, "");
+  const hay = `${c.name} ${c.email} ${c.cars.map(x => `${x.vin} ${x.plate || ""} ${x.model || ""}`).join(" ")}`.toLowerCase();
+  if (digits.length >= 3 && /^[\d\s+()-]+$/.test(clientsQuery.trim())) return c.phone.replace(/\D/g, "").includes(digits);
+  return words.every(w => hay.includes(w));
+}
+
+async function showClients(){
+  if (!$("#clientsDlg").open) $("#clientsDlg").showModal();
+  $("#clientsTitle").textContent = "Клієнти";
+  $("#clientsBody").innerHTML = "Завантаження…";
+  try{ clientsData = await api("/api/clients"); }
+  catch(e){ $("#clientsBody").textContent = e.message; return; }
+  const connected = clientsData.clients.filter(c => c.telegram && !c.telegram.blocked).length;
+  $("#clientsBody").innerHTML = `
+    <div class="toolbar"><input id="clientsQuery" type="search" placeholder="Пошук: ПІБ, телефон, VIN, держномер" value="${esc(clientsQuery)}">
+      ${clientsData.telegram ? `<button class="primary" data-broadcast>📣 Розсилка</button>` : ""}
+      <button data-download="/api/clients/export.xlsx">⬇ Excel</button></div>
+    <div class="filter-chips" id="clientFilter">${CLIENT_FILTERS.map(([v, l]) => `<button data-cf="${v}" class="${v === clientsFilter ? "on" : ""}">${l}</button>`).join("")}</div>
+    <div class="sub" style="margin-bottom:8px">Усього клієнтів: ${clientsData.clients.length}${clientsData.telegram ? ` · у Telegram: ${connected}` : ""}</div>
+    <div id="clientsTable"></div>`;
+  $("#clientsQuery").oninput = e => { clientsQuery = e.target.value; renderClientsTable(); };
+  renderClientsTable();
+}
+
+function renderClientsTable(){
+  const list = clientsData.clients.filter(clientMatches);
+  $("#clientsTable").innerHTML = list.length ? `<div class="tbl"><table>
+    <tr><th>Клієнт</th><th class="hide-m">Автомобілі</th><th class="r">Візитів</th><th class="r hide-m">Сума</th><th class="hide-m">Останній візит</th></tr>
+    ${list.map(c => `<tr class="click" data-client="${esc(c.key)}"><td>${dash(c.name)} ${tgBadge(c)}<div class="sub">${dash(c.phone)}<span class="show-m"> · ${c.cars.map(x => esc(x.model || "Tesla")).join(", ")} · ${dateOnly(c.last_visit)}</span></div></td>
+      <td class="hide-m">${c.cars.map(x => `Tesla ${esc(x.model || "")} ${x.plate ? `<span class="sub">${esc(x.plate)}</span>` : ""}`).join("<br>") || "—"}</td>
+      <td class="r">${c.visits}</td><td class="r hide-m">${num(c.spent)} $</td><td class="hide-m">${dateOnly(c.last_visit)}</td></tr>`).join("")}
+    </table></div>` : `<div class="empty">${clientsData.clients.length ? "Нічого не знайдено." : "Клієнти з'являться тут із першими замовленнями-нарядами."}</div>`;
+}
+
+function showClientCard(key){
+  const c = clientsData.clients.find(x => x.key === key);
+  if (!c) return;
+  $("#clientsTitle").textContent = c.name || c.phone || "Клієнт";
+  $("#clientsBody").innerHTML = `
+    <div class="client-head"><button data-clients-back>← Усі клієнти</button>${tgBadge(c)}</div>
+    <div class="info"><dl><dt>Телефон</dt><dd>${dash(c.phone)}</dd><dt>E-mail</dt><dd>${dash(c.email)}</dd>
+      ${c.telegram ? `<dt>Telegram</dt><dd>${esc(c.telegram.name)}${c.telegram.at ? ` · з ${dateOnly(c.telegram.at)}` : ""}${c.telegram.blocked ? " · заблокував бота" : ""}</dd>` : ""}</dl></div>
+    <div class="client-stats"><div><b>${c.visits}</b>візитів</div><div><b>${num(c.spent)} $</b>усього</div>
+      <div><b>${dateOnly(c.first_visit)}</b>перший візит</div><div><b>${dateOnly(c.last_visit)}</b>останній візит</div></div>
+    <div class="sec-head"><h3>Автомобілі</h3><button class="primary" data-client-order="">＋ Нове замовлення</button></div>
+    <div class="cars">${c.cars.map(x => `<div class="car"><b>Tesla ${esc(x.model || "")} ${x.year ? esc(x.year) : ""}</b>
+        <span class="sub">${esc(x.vin || "")}${x.plate ? " · " + esc(x.plate) : ""}${x.odometer_km != null ? " · " + Number(x.odometer_km).toLocaleString("uk-UA") + " км" : ""}</span>
+        <button data-client-order="${esc(x.vin || "")}">＋ Замовлення на це авто</button></div>`).join("") || `<div class="sub">—</div>`}</div>
+    <h3>Замовлення-наряди</h3>
+    ${c.orders.length ? `<div class="tbl"><table><tr><th>Номер</th><th>Дата</th><th class="hide-m">Роботи</th><th class="r">Сума</th><th>Статус</th><th></th></tr>
+      ${c.orders.map(o => `<tr><td>${esc(o.number)}<div class="sub">${esc(o.vehicle)}</div></td><td>${dateOnly(o.date)}</td>
+        <td class="hide-m sub">${o.works.map(esc).join(", ") || "—"}</td><td class="r">${num(o.total)} ${esc(o.currency)}</td>
+        <td><span class="badge ${stClass(o.status)}">${esc(o.status)}</span></td>
+        <td class="r"><button data-client-open="${esc(o.number)}">Відкрити</button> <button data-print="${esc(o.number)}">🖨</button></td></tr>`).join("")}</table></div>` : `<div class="sub">—</div>`}`;
+  $("#clientsBody").dataset.key = key;
+}
+
+function showBroadcast(){
+  const recipients = clientsData.clients.filter(c => c.telegram && !c.telegram.blocked && clientMatches(c));
+  $("#clientsTitle").textContent = "Розсилка в Telegram";
+  $("#clientsBody").innerHTML = `
+    <div class="client-head"><button data-clients-back>← Клієнти</button></div>
+    <div class="bc-form">
+      <div class="sub">Повідомлення отримають лише клієнти, які підключились до бота (натиснули «Старт»). Підстановки:
+        <code>{ім'я}</code>, <code>{авто}</code>, <code>{сервіс}</code>, <code>{адреса}</code>.</div>
+      <div class="filter-chips" id="bcTemplates" style="margin-top:8px">${Object.keys(BC_TEMPLATES).map(t => `<button data-tpl="${esc(t)}">${esc(t)}</button>`).join("")}</div>
+      <textarea id="bcText" maxlength="3000" placeholder="Текст повідомлення…"></textarea>
+      <div class="sub" id="bcPreview"></div>
+      <h3>Отримувачі · <span id="bcCount"></span></h3>
+      <div class="sub">Фільтр і пошук зі списку клієнтів: «${esc((CLIENT_FILTERS.find(f => f[0] === clientsFilter) || ["", "усі"])[1])}»${clientsQuery ? `, «${esc(clientsQuery)}»` : ""}.</div>
+      ${recipients.length ? `<div class="bc-list">${recipients.map(c => `<label><input type="checkbox" data-bc-key="${esc(c.key)}" checked> ${dash(c.name)} <span class="sub">${esc(c.phone)} · ${c.cars.map(x => esc(x.model || "Tesla")).join(", ")} · ${dateOnly(c.last_visit)}</span></label>`).join("")}</div>`
+        : `<div class="empty">Немає підключених до бота клієнтів за цим фільтром.</div>`}
+      <div class="send-row"><button class="primary" id="bcSend" ${recipients.length ? "" : "disabled"}>📣 Надіслати</button><span id="bcRes"></span></div>
+      ${clientsData.broadcasts.length ? `<h3>Попередні розсилки</h3><div class="tbl"><table><tr><th>Дата</th><th>Текст</th><th class="r">Надіслано</th></tr>
+        ${clientsData.broadcasts.map(b => `<tr><td>${esc(b.at)}</td><td class="sub">${esc(b.text)}</td><td class="r">${b.sent}${b.failed ? ` <span class="sub">(не доставлено ${b.failed})</span>` : ""}</td></tr>`).join("")}</table></div>` : ""}
+    </div>`;
+  const count = () => {
+    const n = document.querySelectorAll("[data-bc-key]:checked").length;
+    $("#bcCount").textContent = n; $("#bcSend").textContent = `📣 Надіслати (${n})`;
+    const first = recipients.find(c => document.querySelector(`[data-bc-key="${CSS.escape(c.key)}"]`).checked);
+    const t = $("#bcText").value;
+    $("#bcPreview").textContent = first && t ? "Приклад: " + t.replaceAll("{ім'я}", first.name || "").replaceAll("{авто}",
+      first.cars[0] ? `Tesla ${first.cars[0].model || ""}${first.cars[0].plate ? ` (${first.cars[0].plate})` : ""}`.replace(/\s+/g, " ") : "ваш автомобіль")
+      .replaceAll("{сервіс}", document.title).replaceAll("{адреса}", catalogAddress()) : "";
+  };
+  $("#bcText").oninput = count;
+  $("#clientsBody").onchange = e => { if (e.target.dataset.bcKey !== undefined) count(); };
+  $("#bcTemplates").onclick = e => { if (e.target.dataset.tpl !== undefined){ $("#bcText").value = BC_TEMPLATES[e.target.dataset.tpl]; $("#bcText").focus(); count(); } };
+  if (recipients.length) count();
+  $("#bcSend").onclick = async () => {
+    const keys = [...document.querySelectorAll("[data-bc-key]:checked")].map(x => x.dataset.bcKey);
+    const text = $("#bcText").value.trim();
+    if (!text){ $("#bcText").focus(); return; }
+    if (!keys.length) return;
+    if (!confirm(`Надіслати повідомлення ${keys.length} клієнтам у Telegram?`)) return;
+    $("#bcSend").disabled = true; $("#bcRes").textContent = "Надсилаю…";
+    try{
+      const r = await api("/api/broadcast", {method: "POST", body: JSON.stringify({keys, text})});
+      $("#bcRes").innerHTML = `<span class="ok-line">✓ Надіслано: ${r.sent}</span>${r.failed ? ` · не доставлено: ${r.failed} (клієнт міг заблокувати бота)` : ""}`;
+    }catch(e){ $("#bcRes").textContent = e.message; $("#bcSend").disabled = false; }
+  };
+}
+let SERVICE_ADDRESS = "";
+const catalogAddress = () => SERVICE_ADDRESS;
+
+$("#btnClients").onclick = showClients;
+$("#closeClients").onclick = () => $("#clientsDlg").close();
+$("#clientsBody").addEventListener("click", async e => {
+  const d = e.target.dataset;
+  if (d.cf !== undefined){ clientsFilter = d.cf; document.querySelectorAll("#clientFilter button").forEach(b => b.classList.toggle("on", b === e.target)); renderClientsTable(); return; }
+  if (d.download) return void (location.href = d.download);
+  if (d.broadcast !== undefined) return showBroadcast();
+  if (d.clientsBack !== undefined) return showClients();
+  if (d.print) return void window.open("/print/" + encodeURIComponent(d.print), "_blank");
+  if (d.clientOpen){
+    const data = await api(`/api/orders/${encodeURIComponent(d.clientOpen)}/open`, {method: "POST"});
+    $("#clientsDlg").close(); $("#log").innerHTML = "";
+    addMsg("assistant", `Відкрито замовлення-наряд № ${d.clientOpen}. Що потрібно змінити?`);
+    renderOrder(data.order);
+    document.querySelector('.tabs button[data-tab="order"]').click();
+    return;
+  }
+  if (d.clientOrder !== undefined){
+    if (busy) return;
+    try{
+      const data = await api("/api/clients/new-order", {method: "POST", body: JSON.stringify({key: $("#clientsBody").dataset.key, vin: d.clientOrder})});
+      $("#clientsDlg").close(); $("#log").innerHTML = "";
+      const v = data.order.vehicle;
+      addMsg("assistant", `Створено замовлення-наряд № ${data.order.number} для клієнта ${data.order.customer.name}` +
+        (v.vin ? ` (Tesla ${v.model} ${v.plate || v.vin}). Вкажіть пробіг і скарги — тут або в панелі.` : ". Вкажіть автомобіль, пробіг і скарги — тут або в панелі."));
+      renderOrder(data.order);
+      document.querySelector('.tabs button[data-tab="order"]').click();
+    }catch(err){ alert(err.message); }
+    return;
+  }
+  const row = e.target.closest("tr[data-client]");
+  if (row) showClientCard(row.dataset.client);
+});
 $("#btnLogout").onclick = () => { location.href = "/logout"; };
 $("#closeDlg").onclick = () => $("#ordersDlg").close();
 
@@ -1362,6 +1537,7 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
     TELEGRAM = !!s.telegram;
     BACKUP_CHAT = !!s.backup_chat;
     if (s.photo_kinds) PHOTO_KINDS = s.photo_kinds;
+    if (s.service) SERVICE_ADDRESS = s.service.address || "";
     if (s.service && s.service.name){ $("#brand").textContent = s.service.name; document.title = s.service.name; }
     if (s.history.length) s.history.forEach(m => addMsg(m.role, m.text));
     const last = remembered();

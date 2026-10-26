@@ -22,12 +22,14 @@ import os
 import re
 import secrets
 import threading
+import time
 from datetime import datetime, timedelta
 from html import escape
 from pathlib import Path
 
 import httpx
 
+from .clients import phone_key as _phone_key
 from .comments import CommentError, CommentStore
 from .order import DRAFT, OrderStore, RepairOrder, now_str
 
@@ -167,7 +169,8 @@ class TelegramBot:
                 # Кошториси на погодженні: номер -> {status, total, chat_id, message_id, sent_at, at}.
                 "approvals": data.get("approvals", {}),
                 "ready_sent": data.get("ready_sent", {}),  # кому вже написали «автомобіль готовий»
-                "backup_date": data.get("backup_date", "")}
+                "backup_date": data.get("backup_date", ""),
+                "broadcasts": data.get("broadcasts", [])}  # журнал розсилок
 
     def _save_links(self) -> None:
         self.links_path.parent.mkdir(parents=True, exist_ok=True)
@@ -428,8 +431,7 @@ class TelegramBot:
     @staticmethod
     def phone_key(phone: str) -> str | None:
         """Останні 9 цифр телефону: «+380 67 123 45 67» і «067 123 45 67» — той самий клієнт."""
-        digits = "".join(ch for ch in phone if ch.isdigit())
-        return digits[-9:] if len(digits) >= 9 else None
+        return _phone_key(phone)
 
     def bot_username(self) -> str:
         if self._username is None:
@@ -565,6 +567,41 @@ class TelegramBot:
             self._dirty.add(number)  # лічильник коментарів у картці
         self._wake.set()
 
+    # --- розсилка ---
+
+    def broadcast(self, messages: list[tuple[str, str]]) -> dict:
+        """Надіслати підключеним клієнтам повідомлення: messages — [(ключ клієнта, текст)].
+        Клієнтів, які заблокували бота, позначає й пропускає надалі."""
+        sent, failed, skipped = 0, [], 0
+        for key, text in messages:
+            client = self.links["clients"].get(key)
+            if not client or client.get("blocked"):
+                skipped += 1
+                continue
+            try:
+                self.api.call("sendMessage", chat_id=client["chat_id"], text=text[:4000])
+                sent += 1
+            except TelegramError as exc:
+                failed.append(key)
+                if any(x in str(exc).lower() for x in ("blocked", "deactivated", "chat not found")):
+                    with self._lock:
+                        client["blocked"] = True
+            except httpx.HTTPError:
+                failed.append(key)
+            time.sleep(0.05)  # Telegram дозволяє до ~30 повідомлень на секунду
+        result = {"at": now_str(), "sent": sent, "failed": len(failed), "skipped": skipped,
+                  "text": messages[0][1][:200] if messages else ""}
+        with self._lock:
+            self.links.setdefault("broadcasts", []).append(result)
+            self.links["broadcasts"] = self.links["broadcasts"][-30:]
+            self._save_links()
+        if self.chat_id and sent:
+            try:
+                self._send(f"📣 Розсилка клієнтам: надіслано {sent}" + (f", не доставлено {len(failed)}" if failed else ""))
+            except (TelegramError, httpx.HTTPError):
+                log.exception("Telegram: не вдалося написати в групу")
+        return result
+
     # --- «Ваш автомобіль готовий» ---
 
     def _notify_ready(self, order: RepairOrder) -> None:
@@ -664,7 +701,9 @@ class TelegramBot:
         key = self.phone_key(order.customer.phone)
         if key:
             with self._lock:
-                self.links["clients"][key] = {"chat_id": chat_id, "name": self.author(msg.get("from", {}))}
+                known = self.links["clients"].get(key, {})
+                self.links["clients"][key] = {"chat_id": chat_id, "name": self.author(msg.get("from", {})),
+                                              "at": known.get("at") if known.get("chat_id") == chat_id else now_str()}
                 self._save_links()
         self.api.call("sendMessage", chat_id=chat_id,
                       text=f"Вітаємо! {greeting} Надсилаємо ваш замовлення-наряд № {order.number}.")

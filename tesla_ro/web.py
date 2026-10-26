@@ -30,8 +30,9 @@ from pydantic import BaseModel
 from .assistant import MODEL, RepairOrderAssistant
 from .backup import TELEGRAM_LIMIT, backup_filename, make_backup
 from .catalog import DEFAULT_CATALOG, MODEL_CODES, Catalog, CatalogError
+from .clients import build_clients, months_since, personalize
 from .comments import CommentError, CommentStore
-from .excel import ExcelError, export_catalog, import_catalog
+from .excel import ExcelError, export_catalog, export_clients, import_catalog
 from .order import STATUSES, OrderStore, StatusError
 from .photos import KINDS as PHOTO_KINDS
 from .photos import PhotoError as GalleryError
@@ -115,6 +116,16 @@ class GalleryPhotoIn(BaseModel):
 class GalleryPhotoEditIn(BaseModel):
     kind: str | None = None
     to_client: bool | None = None
+
+
+class ClientOrderIn(BaseModel):
+    key: str
+    vin: str = ""
+
+
+class BroadcastIn(BaseModel):
+    keys: list[str]
+    text: str
 
 
 class CommentIn(BaseModel):
@@ -797,6 +808,66 @@ def create_app(
         if bot:
             bot.comment_added(number, comment)
         return comments.list(number)
+
+    # --- база клієнтів і розсилка ---
+
+    def all_clients() -> list[dict]:
+        return build_clients(store.list(), bot.links["clients"] if bot else None)
+
+    @app.get("/api/clients")
+    def clients_view():
+        clients = all_clients()
+        for c in clients:
+            c["months"] = months_since(c["last_visit"])
+        return {"clients": clients, "telegram": bot is not None,
+                "broadcasts": list(reversed(bot.links.get("broadcasts", []))) if bot else []}
+
+    @app.get("/api/clients/export.xlsx")
+    def clients_export():
+        return Response(export_clients(all_clients()),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''klienty-{time.strftime('%Y-%m-%d')}.xlsx"})
+
+    @app.post("/api/clients/new-order")
+    def client_new_order(body: ClientOrderIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        """Нове замовлення-наряд для відомого клієнта: ПІБ, телефон і (якщо вибрано) автомобіль підставляються."""
+        client = next((c for c in all_clients() if c["key"] == body.key), None)
+        if client is None:
+            raise HTTPException(404, "Клієнта не знайдено")
+        conv = conversation(tesla_ro_sid, response)
+        if conv.lock.locked():
+            raise HTTPException(409, "Помічник ще відповідає — спробуйте за мить")
+        restart(conv)
+        conv.session.new_order()
+        conv.session.set_customer(client["name"], client["phone"], client["email"])
+        note = f"створив нове замовлення-наряд для клієнта {client['name']}"
+        car = next((c for c in client["cars"] if body.vin and c.get("vin") == body.vin), None)
+        if car:
+            try:
+                conv.session.set_vehicle(car["vin"], plate=car.get("plate", ""))
+                note += f", автомобіль VIN {car['vin']} (пробіг треба уточнити)"
+            except ToolError:
+                pass
+        conv.manual_changes.append(note)
+        return {"order": conv.session.snapshot()}
+
+    @app.post("/api/broadcast")
+    def broadcast(body: BroadcastIn):
+        if not bot:
+            raise HTTPException(503, "Telegram-бот не налаштований")
+        text = body.text.strip()
+        if not text:
+            raise HTTPException(400, "Порожнє повідомлення")
+        if len(text) > 3000:
+            raise HTTPException(400, "Повідомлення задовге (до 3000 символів)")
+        keys = list(dict.fromkeys(body.keys))
+        if not keys:
+            raise HTTPException(400, "Не вибрано жодного клієнта")
+        if len(keys) > 1000:
+            raise HTTPException(400, "Забагато отримувачів за раз (до 1000)")
+        clients = {c["key"]: c for c in all_clients()}
+        messages = [(k, personalize(text, clients[k], catalog.service)) for k in keys if k in clients]
+        return bot.broadcast(messages)
 
     # --- фото до замовлення ---
 
