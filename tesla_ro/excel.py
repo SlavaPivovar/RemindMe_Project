@@ -173,3 +173,25 @@ def import_catalog(catalog: Catalog, data: bytes, apply: bool) -> dict:
         catalog.merge_items(result["operations"], result["parts"])
     preview["applied"] = bool(apply)
     return preview
+
+
+CLIENT_COLUMNS = [("ПІБ", 30), ("Телефон", 18), ("E-mail", 24), ("Автомобілі", 40), ("Візитів", 9),
+                  ("Сума, $", 12), ("Останній візит", 17), ("Telegram", 22)]
+
+
+def export_clients(clients: list[dict]) -> bytes:
+    from .clients import car_label
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    rows = []
+    for c in clients:
+        cars = "; ".join(" ".join(x for x in (car_label(car), car.get("vin", "")) if x) for car in c["cars"])
+        tg = c["telegram"]
+        rows.append([c["name"], c["phone"], c["email"], cars, c["visits"], float(c["spent"]),
+                     c["last_visit"] or c["last_order"],
+                     ("заблокував бота" if tg["blocked"] else f"так, з {tg['at']}" if tg["at"] else "так") if tg else ""])
+    _sheet(wb, "Клієнти", [(None, label, width) for label, width in CLIENT_COLUMNS], rows)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
