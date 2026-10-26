@@ -61,6 +61,7 @@ th{{background:#eee;text-align:left}} .r{{text-align:right;white-space:nowrap}}
 .head{{display:flex;justify-content:space-between}} .tot td{{border:none}} .sign{{margin-top:40px;display:flex;gap:60px}}
 .sign div{{flex:1;border-top:1px solid #000;padding-top:4px}}
 @media print{{body{{margin:0}}}}
+@page{{size:A4;margin:14mm}}
 </style></head><body>
 <div class=head><div><h1>ЗАМОВЛЕННЯ-НАРЯД № {e(order.number)}</h1>
 <div>від {e(order.created_at)} · статус: {e(order.status)}</div></div>
@@ -99,3 +100,20 @@ th{{background:#eee;text-align:left}} .r{{text-align:right;white-space:nowrap}}
 <div class=sign><div>Майстер-приймальник</div><div>Замовник</div></div>
 </body></html>
 """
+
+
+class PdfUnavailable(RuntimeError):
+    """На сервері немає бібліотек для PDF (WeasyPrint і Pango)."""
+
+
+def render_pdf(order: RepairOrder, service: dict | None = None) -> bytes:
+    """Та сама друкована форма у PDF (A4) — для надсилання клієнту."""
+    try:
+        import weasyprint  # важка залежність із системними бібліотеками — імпортуємо лише за потреби
+    except (ImportError, OSError) as exc:
+        raise PdfUnavailable(str(exc)) from None
+    return weasyprint.HTML(string=render_html(order, service)).write_pdf()
+
+
+def pdf_filename(order: RepairOrder) -> str:
+    return f"Замовлення-наряд {order.number}.pdf"

@@ -155,6 +155,15 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .comment-form input,.comment-form textarea{font:inherit;font-size:14px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);min-width:0}
 .comment-form textarea{grid-column:1 / -1;min-height:64px;resize:vertical}
 .cc{font-size:11px;color:var(--muted);white-space:nowrap}
+.send-sec{border-top:1px solid var(--line);padding:12px 0 4px}
+.send-sec:first-child{border-top:0;padding-top:4px}
+.send-sec h3{margin:0 0 6px}
+.send-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+.qr{background:#fff;border-radius:12px;padding:10px;width:200px;height:200px;display:flex;align-items:center;justify-content:center}
+.qr svg{width:100%;height:100%}
+.qr-wrap{display:flex;flex-wrap:wrap;gap:16px;align-items:center}
+.qr-wrap .link{flex:1;min-width:180px;word-break:break-all;font-size:12px;color:var(--muted)}
+.ok-line{color:var(--ok);font-weight:600}
 .form-warn{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:8px 12px;margin-top:10px}
 button.danger-lite{color:var(--accent)}
 .line-add button{font-size:13px;padding:5px 12px}
@@ -377,7 +386,7 @@ function renderOrder(o){
       <select class="status ${stClass(o.status)}" id="statusSel" title="Статус замовлення-наряду">
         ${STATUSES.map(s => `<option ${s === o.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
       <span class="badge">${esc(o.created_at)}</span>
-      <div class="actions"><button id="btnPrint">🖨 Друк</button><button id="btnDelete" class="danger-lite" title="Видалити замовлення-наряд">🗑</button></div>
+      <div class="actions"><button id="btnSend" title="Надіслати клієнту">📤 <span class="label">Клієнту</span></button><button id="btnPrint">🖨 Друк</button><button id="btnDelete" class="danger-lite" title="Видалити замовлення-наряд">🗑</button></div>
     </div>
     ${o.ai_usage && o.ai_usage.requests ? `<div class="ai-cost" title="Вартість запитів до Claude по цьому замовленню-наряду (у друковану форму не потрапляє)">Claude: ${usd(o.ai_usage.cost_usd)} · запитів: ${o.ai_usage.requests}</div>` : ""}
     ${o.status_log && o.status_log.length ? `<div class="status-log">${o.status_log.slice(-5).map(e => `${esc(e.status)} ${esc(e.at)}`).join(" → ")}</div>` : ""}
@@ -420,6 +429,7 @@ function renderOrder(o){
   renderComments(o.comments || []);
   $("#btnPrint").onclick = () => window.open("/print/current", "_blank");
   $("#btnDelete").onclick = () => deleteOrder(o.number);
+  $("#btnSend").onclick = () => sendToClientDialog(o);
   $("#statusSel").onchange = async e => {
     const status = e.target.value;
     try{
@@ -587,6 +597,87 @@ async function newManualOrder(){
     document.querySelector('.tabs button[data-tab="order"]').click();
     editHeadDialog();
   }catch(e){ addMsg("error", e.message); }
+}
+
+// ---------- Надіслати замовлення-наряд клієнту ----------
+let clientPoll = null;
+async function sendToClientDialog(o){
+  clearInterval(clientPoll);
+  $("#lineTitle").textContent = `Надіслати клієнту · № ${o.number}`;
+  $("#lineBody").innerHTML = `
+    <div class="send-sec"><h3>PDF через «Поділитися»</h3>
+      <div class="sub">Відкриється меню телефона: виберіть Telegram (чи Viber) і чат клієнта.</div>
+      <div class="send-row"><button class="primary" id="sharePdf" disabled>📤 Поділитися PDF</button>
+        <a class="sub" id="pdfLink" href="/pdf/${encodeURIComponent(o.number)}" target="_blank" rel="noopener">⬇ Відкрити PDF</a></div>
+      <div class="sub" id="shareNote">Готую PDF…</div></div>
+    ${TELEGRAM ? `<div class="send-sec"><h3>Через бота ${esc(document.title)}</h3><div id="botBox" class="sub">Завантаження…</div></div>` : ""}
+    <div class="form-err" id="lineErr" hidden></div>`;
+  $("#lineDlg").showModal();
+  $("#lineDlg").addEventListener("close", () => clearInterval(clientPoll), {once: true});
+
+  // PDF готуємо заздалегідь: iPhone дозволяє «Поділитися» лише одразу після натискання кнопки.
+  let file = null;
+  try{
+    const r = await fetch(`/pdf/${encodeURIComponent(o.number)}`, {credentials: "same-origin"});
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Помилка ${r.status}`);
+    file = new File([await r.blob()], `Замовлення-наряд ${o.number}.pdf`, {type: "application/pdf"});
+    if (navigator.canShare && navigator.canShare({files: [file]})){
+      $("#sharePdf").disabled = false;
+      $("#shareNote").textContent = "";
+    }else{
+      $("#sharePdf").hidden = true;
+      $("#shareNote").textContent = "Цей браузер не вміє «Поділитися» файлом — відкрийте PDF, збережіть і надішліть у Telegram вручну.";
+    }
+  }catch(e){ $("#shareNote").textContent = e.message; $("#sharePdf").hidden = true; }
+  $("#sharePdf").onclick = async () => {
+    try{ await navigator.share({files: [file], title: `Замовлення-наряд ${o.number}`}); }
+    catch(e){ if (e.name !== "AbortError") $("#shareNote").textContent = e.message; }
+  };
+  if (TELEGRAM) loadBotBox(o);
+}
+
+async function loadBotBox(o, sentNow){
+  let d;
+  try{ d = await api(`/api/orders/${encodeURIComponent(o.number)}/client-link`, {method: "POST"}); }
+  catch(e){ $("#botBox").textContent = e.message; return; }
+  if (!$("#botBox")) return;
+  if (d.client){
+    clearInterval(clientPoll);
+    $("#botBox").innerHTML = `${sentNow ? `<div class="ok-line">✓ Клієнт підключився — бот уже надіслав йому PDF.</div>` : ""}
+      <div>Клієнт <b>${esc(d.client)}</b> підключений до бота.</div>
+      <div class="send-row"><button class="primary" id="sendBot">Надіслати PDF через бота</button><span id="sendBotRes"></span></div>`;
+    $("#sendBot").onclick = async () => {
+      $("#sendBot").disabled = true;
+      try{
+        const r = await api(`/api/orders/${encodeURIComponent(o.number)}/send-telegram`, {method: "POST"});
+        $("#sendBotRes").innerHTML = `<span class="ok-line">✓ Надіслано: ${esc(r.client)}</span>`;
+      }catch(e){ $("#sendBotRes").textContent = e.message; $("#sendBot").disabled = false; }
+    };
+    return;
+  }
+  $("#botBox").innerHTML = `<div style="margin-bottom:8px">Клієнт сканує QR-код камерою телефона (або відкриває посилання) і натискає «Старт» —
+      бот одразу надішле йому PDF${d.has_phone ? " і запам'ятає його для наступних замовлень" : ""}.</div>
+    ${d.has_phone ? "" : `<div class="form-warn" style="margin:0 0 8px">У замовленні немає телефону клієнта — бот надішле цей замовлення-наряд, але не запам'ятає клієнта.</div>`}
+    <div class="qr-wrap"><div class="qr">${d.qr_svg}</div>
+      <div class="link"><span id="clientLink">${esc(d.link)}</span>
+        <div class="send-row"><button id="copyLink">Копіювати посилання</button>${navigator.share ? `<button id="shareLink">Поділитися посиланням</button>` : ""}</div>
+        <div id="waitClient">Чекаю, поки клієнт натисне «Старт»…</div></div></div>`;
+  $("#copyLink").onclick = async () => {
+    try{ await navigator.clipboard.writeText(d.link); $("#copyLink").textContent = "✓ Скопійовано"; }
+    catch(e){ prompt("Скопіюйте посилання:", d.link); }
+  };
+  if ($("#shareLink")) $("#shareLink").onclick = () => navigator.share({text: `Ваш замовлення-наряд № ${o.number}: ${d.link}`}).catch(() => {});
+  clearInterval(clientPoll);
+  if (d.has_phone){
+    // Коли клієнт натисне «Старт», бот надішле PDF сам; тут лише показуємо, що це сталося.
+    clientPoll = setInterval(async () => {
+      if (!$("#lineDlg").open){ clearInterval(clientPoll); return; }
+      try{
+        const x = await api(`/api/orders/${encodeURIComponent(o.number)}/client-link`, {method: "POST"});
+        if (x.client) loadBotBox(o, true);
+      }catch(e){}
+    }, 4000);
+  }
 }
 
 async function deleteOrder(number){

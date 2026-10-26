@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import threading
 from html import escape
 from pathlib import Path
@@ -39,6 +40,10 @@ class TelegramError(Exception):
     pass
 
 
+class ClientNotConnected(Exception):
+    pass
+
+
 class TelegramAPI:
     def __init__(self, token: str, http: httpx.Client | None = None):
         self.base = f"https://api.telegram.org/bot{token}/"
@@ -46,6 +51,19 @@ class TelegramAPI:
 
     def call(self, method: str, **params):
         response = self.http.post(self.base + method, json={k: v for k, v in params.items() if v is not None})
+        return self._result(method, response)
+
+    def send_document(self, chat_id: int, filename: str, data: bytes, caption: str = "",
+                      parse_mode: str | None = None):
+        fields = {"chat_id": str(chat_id), "caption": caption}
+        if parse_mode:
+            fields["parse_mode"] = parse_mode
+        response = self.http.post(self.base + "sendDocument", data=fields,
+                                  files={"document": (filename, data, "application/pdf")})
+        return self._result("sendDocument", response)
+
+    @staticmethod
+    def _result(method: str, response):
         try:
             data = response.json()
         except ValueError:
@@ -80,6 +98,9 @@ class TelegramBot:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self.links = self._load_links()
+        self.render_pdf = None  # order -> bytes; задає web.py (друкована форма у PDF)
+        self.service_name = ""
+        self._username: str | None = None
 
     # --- зв'язок повідомлень із замовленнями (файл на диску) ---
 
@@ -88,7 +109,10 @@ class TelegramBot:
             data = json.loads(self.links_path.read_text(encoding="utf-8"))
         except (FileNotFoundError, ValueError):
             data = {}
-        return {"orders": data.get("orders", {}), "messages": data.get("messages", {}), "offset": data.get("offset", 0)}
+        return {"orders": data.get("orders", {}), "messages": data.get("messages", {}), "offset": data.get("offset", 0),
+                # Клієнти: посилання-запрошення до бота й чати тих, хто натиснув «Старт».
+                "client_tokens": data.get("client_tokens", {}), "order_tokens": data.get("order_tokens", {}),
+                "clients": data.get("clients", {})}
 
     def _save_links(self) -> None:
         self.links_path.parent.mkdir(parents=True, exist_ok=True)
@@ -239,6 +263,9 @@ class TelegramBot:
         if command == "/chatid":  # для налаштування: дізнатися id групи
             self.api.call("sendMessage", chat_id=chat_id, text=f"ID цього чату: {chat_id}")
             return
+        if msg["chat"].get("type") == "private":
+            self._private(msg, text, command)
+            return
         if chat_id != self.chat_id:
             return  # чужі чати ігноруємо
         if command in ("/start", "/help"):
@@ -306,6 +333,87 @@ class TelegramBot:
             parts.append("\n<b>Коментарі:</b>")
             parts += [f"• {escape(c['at'])} <b>{escape(c['author'])}</b>: {escape(c['text'])}" for c in comments[-30:]]
         self._remember(self._send("\n".join(parts)[:4000]), number)
+
+    # --- клієнти: надсилання замовлення-наряду в особистий чат ---
+
+    @staticmethod
+    def phone_key(phone: str) -> str | None:
+        """Останні 9 цифр телефону: «+380 67 123 45 67» і «067 123 45 67» — той самий клієнт."""
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        return digits[-9:] if len(digits) >= 9 else None
+
+    def bot_username(self) -> str:
+        if self._username is None:
+            self._username = self.api.call("getMe")["username"]
+        return self._username
+
+    def client_link(self, number: str) -> str:
+        """Посилання t.me/<бот>?start=<токен>: клієнт натискає «Старт» і отримує цей замовлення-наряд."""
+        with self._lock:
+            token = self.links["order_tokens"].get(number)
+            if token is None:
+                token = "o_" + secrets.token_urlsafe(12)  # не вгадати: у замовленні персональні дані
+                self.links["order_tokens"][number] = token
+                self.links["client_tokens"][token] = number
+                self._save_links()
+        return f"https://t.me/{self.bot_username()}?start={token}"
+
+    def client_for(self, order: RepairOrder) -> dict | None:
+        key = self.phone_key(order.customer.phone)
+        return self.links["clients"].get(key) if key else None
+
+    def send_to_client(self, order: RepairOrder) -> dict:
+        """Надіслати PDF клієнту, який уже підключився до бота (за телефоном у замовленні)."""
+        client = self.client_for(order)
+        if client is None:
+            raise ClientNotConnected("Клієнт ще не підключений до бота")
+        self._send_order_document(client["chat_id"], order)
+        self._note_in_group(order.number, f"📤 {escape(order.number)}: надіслано клієнту в Telegram")
+        return client
+
+    def _send_order_document(self, chat_id: int, order: RepairOrder) -> None:
+        caption = (f"Замовлення-наряд № {order.number}" + (f" · {self.service_name}" if self.service_name else "")
+                   + f"\nРазом до сплати: {money(order.totals()['total'])} {order.currency}")
+        if self.render_pdf:
+            self.api.send_document(chat_id, f"Замовлення-наряд {order.number}.pdf", self.render_pdf(order), caption)
+        else:
+            self.api.call("sendMessage", chat_id=chat_id, text=caption)
+
+    def _note_in_group(self, number: str, text: str) -> None:
+        link = self.links["orders"].get(number)
+        if self.chat_id and link:
+            try:
+                self._remember(self._send(text, link["message_id"]), number)
+            except (TelegramError, httpx.HTTPError):
+                log.exception("Telegram: не вдалося написати в групу")
+
+    def _private(self, msg: dict, text: str, command: str) -> None:
+        chat_id = msg["chat"]["id"]
+        arg = text.split(maxsplit=1)[1].strip() if command == "/start" and " " in text else ""
+        greeting = f"Це бот сервісу {self.service_name}." if self.service_name else "Це бот сервісу."
+        if not arg.startswith("o_"):
+            self.api.call("sendMessage", chat_id=chat_id,
+                          text=f"{greeting} Сюди ми надсилатимемо ваші замовлення-наряди.")
+            return
+        number = self.links["client_tokens"].get(arg)
+        try:
+            order = self.store.load(number) if number else None
+        except FileNotFoundError:
+            order = None
+        if order is None:
+            self.api.call("sendMessage", chat_id=chat_id,
+                          text="Посилання застаріло. Попросіть майстра надіслати замовлення-наряд ще раз.")
+            return
+        key = self.phone_key(order.customer.phone)
+        if key:
+            with self._lock:
+                self.links["clients"][key] = {"chat_id": chat_id, "name": self.author(msg.get("from", {}))}
+                self._save_links()
+        self.api.call("sendMessage", chat_id=chat_id,
+                      text=f"Вітаємо! {greeting} Надсилаємо ваш замовлення-наряд № {order.number}.")
+        self._send_order_document(chat_id, order)
+        self._note_in_group(order.number, f"📲 {escape(order.number)}: клієнт підключився до бота й отримав "
+                                          "замовлення-наряд")
 
     # --- фонові потоки ---
 

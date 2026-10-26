@@ -14,8 +14,12 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import quote
 
 import anthropic
+import httpx
+import qrcode
+import qrcode.image.svg
 from anthropic.lib.tools import ToolError
 from fastapi import Cookie, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -25,11 +29,12 @@ from .assistant import MODEL, RepairOrderAssistant
 from .catalog import DEFAULT_CATALOG, MODEL_CODES, Catalog, CatalogError
 from .comments import CommentError, CommentStore
 from .order import STATUSES, OrderStore, StatusError
-from .render import render_html
+from .render import PdfUnavailable, pdf_filename, render_html, render_pdf
 from .tools import OrderSession
 from .usage import UsageLedger
 from .usage import add as add_usage
 from .usage import empty as empty_usage
+from .telegram import ClientNotConnected, TelegramError
 from .telegram import from_env as telegram_from_env
 from .vision import PhotoError, parse_data_url, recognize
 
@@ -153,6 +158,8 @@ def create_app(
     bot = telegram(store, comments) if telegram else None
     if bot:
         store.listeners.append(bot.order_saved)
+        bot.render_pdf = lambda order: render_pdf(order, catalog.service)
+        bot.service_name = catalog.service.get("name", "")
     client = client or anthropic.Anthropic()
     conversations: dict[str, Conversation] = {}
     conversations_lock = threading.Lock()
@@ -564,7 +571,10 @@ def create_app(
 
     @app.put("/api/catalog/settings")
     def update_settings(body: dict):
-        return edit(catalog.update_settings, body)
+        result = edit(catalog.update_settings, body)
+        if bot:
+            bot.service_name = catalog.service.get("name", "")
+        return result
 
     def matches(o, q: str) -> bool:
         """Пошук за номером, VIN, держномером, ПІБ або телефоном (телефон — лише за цифрами)."""
@@ -610,6 +620,63 @@ def create_app(
             conv.manual_changes.clear()
         conv.session.order = order
         return {"order": conv.session.snapshot()}
+
+    def pdf_response(order) -> Response:
+        try:
+            pdf = render_pdf(order, catalog.service)
+        except PdfUnavailable:
+            raise HTTPException(503, "PDF недоступний на сервері — скористайтеся «Друк» → «Зберегти як PDF»") from None
+        name = quote(pdf_filename(order))
+        return Response(pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": f"inline; filename*=UTF-8''{name}"})
+
+    @app.get("/pdf/current")
+    def pdf_current(response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+        if conv.session.order is None:
+            raise HTTPException(404, "Замовлення-наряд ще не створено")
+        return pdf_response(conv.session.order)
+
+    @app.get("/pdf/{number}")
+    def pdf_saved(number: str):
+        try:
+            return pdf_response(store.load(number))
+        except FileNotFoundError:
+            raise HTTPException(404, "Замовлення-наряд не знайдено") from None
+
+    def saved_order_for_client(number: str):
+        if not bot:
+            raise HTTPException(503, "Telegram-бот не налаштований")
+        try:
+            return store.load(number)
+        except FileNotFoundError:
+            raise HTTPException(404, "Замовлення-наряд ще не збережено — спершу заповніть його") from None
+
+    @app.post("/api/orders/{number}/client-link")
+    def client_link(number: str):
+        """Посилання й QR-код: клієнт відкриває бота, натискає «Старт» і отримує PDF замовлення-наряду."""
+        order = saved_order_for_client(number)
+        try:
+            link = bot.client_link(number)
+        except (TelegramError, httpx.HTTPError):
+            raise HTTPException(502, "Не вдалося зв'язатися з Telegram") from None
+        qr = qrcode.make(link, image_factory=qrcode.image.svg.SvgPathImage, box_size=8).to_string().decode()
+        client = bot.client_for(order)
+        return {"link": link, "qr_svg": qr, "client": client["name"] if client else None,
+                "has_phone": bot.phone_key(order.customer.phone) is not None}
+
+    @app.post("/api/orders/{number}/send-telegram")
+    def send_telegram(number: str):
+        order = saved_order_for_client(number)
+        try:
+            client = bot.send_to_client(order)
+        except ClientNotConnected:
+            raise HTTPException(409, "Клієнт ще не підключив бота — покажіть йому QR-код або надішліть посилання") from None
+        except PdfUnavailable:
+            raise HTTPException(503, "PDF недоступний на сервері") from None
+        except (TelegramError, httpx.HTTPError) as exc:
+            raise HTTPException(502, f"Telegram: {exc}") from None
+        return {"sent": True, "client": client["name"]}
 
     @app.get("/print/current", response_class=HTMLResponse)
     def print_current(response: Response, tesla_ro_sid: str | None = Cookie(None)):
