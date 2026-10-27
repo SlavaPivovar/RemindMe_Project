@@ -103,7 +103,7 @@ dialog td button{padding:3px 8px;font-size:12px}
 .acts{white-space:nowrap}
 .form{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px 12px;align-items:start;padding:12px 0}
 .form label{color:var(--muted);padding-top:8px}
-.form input[type=text],.form input[type=tel],.form input[type=email],.form input:not([type]),.form select{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.form input[type=date],.form input[type=time],.form input[type=text],.form input[type=tel],.form input[type=email],.form input:not([type]),.form select{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
 .form input:disabled{opacity:.6}
 .checks{display:flex;flex-wrap:wrap;gap:6px 14px;padding-top:7px}
 .checks label{color:var(--text);padding:0;display:flex;gap:5px;align-items:center}
@@ -176,6 +176,28 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .assignee{display:flex;align-items:center;gap:6px;margin:-4px 0 12px;font-size:13px;color:var(--muted)}
 .assignee input{font:inherit;font-size:13px;padding:5px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);min-width:0;width:240px;max-width:100%}
 .comment audio{display:block;width:100%;max-width:340px;height:36px;margin-top:4px}
+.bk-agent{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:end;padding-top:12px}
+.bk-agent .mic{width:42px;height:42px;padding:0;display:grid;place-items:center}
+.bk-agent .mic svg{width:20px;height:20px}
+.bk-agent .mic.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);animation:pulse 1.4s ease-in-out infinite}
+.bk-agent textarea{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);resize:vertical;min-width:0}
+.bk-log{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.bk-log div{font-size:13px;padding:6px 10px;border-radius:8px;background:var(--bot)}
+.bk-log div.me{background:transparent;color:var(--muted);padding:0 2px}
+.bk-log div.err{background:var(--warn-bg);color:var(--warn)}
+.bk-nav{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:10px 0}
+.bk-nav .bk-new{margin-left:auto}
+.bk-day{margin-bottom:12px}
+.bk-day h4{margin:0 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.bk-day.today h4{color:var(--accent)}
+.bk-item{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin-bottom:6px}
+.bk-item .t{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bk-item .t small{display:block;font-weight:400;color:var(--muted)}
+.bk-item .acts{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:6px}
+.bk-item .acts button{padding:3px 9px;font-size:13px}
+.bk-item.off{opacity:.55}
+.bk-item.off .who{text-decoration:line-through}
+.bk-warn{color:var(--warn);font-size:12px}
 .tg{font-size:12px;white-space:nowrap;color:var(--ok)}
 .tg.off{color:var(--muted)}
 tr.click{cursor:pointer}
@@ -226,6 +248,8 @@ button.danger-lite{color:var(--accent)}
   main > .card.show{display:flex}
   .info{grid-template-columns:1fr}
   #catalogList .hide-m,#orderBody .hide-m,#clientsBody .hide-m{display:none}
+  .bk-agent textarea{grid-column:1 / -1;min-height:64px}
+  .bk-agent .mic{justify-self:end}
   #catalogList .show-m,#clientsBody .show-m{display:inline}
   #orderBody .show-m{display:block}
   #orderBody td.acts{white-space:nowrap}
@@ -245,6 +269,7 @@ button.danger-lite{color:var(--accent)}
   <button id="btnCatalog" title="Довідник робіт">📚 <span class="label">Довідник</span></button>
   <button id="btnOrders" title="Збережені замовлення-наряди">📁 <span class="label">Збережені</span></button>
   <button id="btnClients" title="База клієнтів">👥 <span class="label">Клієнти</span></button>
+  <button id="btnBookings" title="Запис клієнтів на сервіс">📅 <span class="label">Запис</span></button>
   <button id="btnNew" title="Почати нове замовлення-наряд">＋ <span class="label">Нове</span></button>
   <button id="btnLogout" title="Вийти" hidden>⎋ <span class="label">Вийти</span></button>
 </header>
@@ -292,6 +317,23 @@ button.danger-lite{color:var(--accent)}
     <div class="toolbar"><input id="ordersQuery" type="search" placeholder="Пошук: VIN, телефон, ПІБ, держномер або номер"></div>
     <div class="filter-chips" id="statusFilter"></div>
     <div id="ordersList"></div>
+  </div>
+</dialog>
+
+<dialog id="bookingsDlg">
+  <div class="dh"><h2>Запис на сервіс</h2><button id="closeBookings">✕</button></div>
+  <div class="db">
+    <form class="bk-agent" id="bkAgentForm">
+      <textarea id="bkText" rows="2" placeholder="Напишіть або надиктуйте 🎤: «Петренко, Model Y, у пʼятницю о 10, ТО і стукіт спереду» або «перенеси Коваль на завтра 12:00»"></textarea>
+      <button type="button" class="mic" id="bkMic" title="Голосове введення" aria-label="Голосове введення" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg>
+      </button>
+      <button class="primary" id="bkSend">Записати</button>
+    </form>
+    <div id="bkLog" class="bk-log"></div>
+    <div class="bk-nav"><button data-bk-nav="-7" title="Попередній тиждень">◀</button><button data-bk-nav="0">Сьогодні</button><button data-bk-nav="7" title="Наступний тиждень">▶</button>
+      <span id="bkRange" class="sub"></span><button data-bk-new class="bk-new">＋ Вручну</button></div>
+    <div id="bkDays">Завантаження…</div>
   </div>
 </dialog>
 
@@ -590,12 +632,17 @@ async function api(path, opts = {}){
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognizer = null;
 
-function setListening(on){
-  $("#mic").classList.toggle("on", on);
-  $("#mic").setAttribute("aria-pressed", String(on));
-  $("#mic").title = on ? "Зупинити запис" : "Голосове введення";
-  $("#input").placeholder = on ? "Слухаю… говоріть"
-                               : "Клієнт, автомобіль, скарги… (Enter — надіслати, Shift+Enter — новий рядок)";
+// Голосове введення працює в чаті й у вікні «Запис»: ціль — поле, кнопка мікрофона й куди писати помилки.
+const VOICE_CHAT = {input: "#input", mic: "#mic", error: msg => addMsg("error", msg)};
+let voiceTarget = VOICE_CHAT;
+
+function setListening(on, target = voiceTarget){
+  const mic = $(target.mic), input = $(target.input);
+  mic.classList.toggle("on", on);
+  mic.setAttribute("aria-pressed", String(on));
+  mic.title = on ? "Зупинити запис" : "Голосове введення";
+  if (on){ input.dataset.placeholder = input.placeholder; input.placeholder = "Слухаю… говоріть"; }
+  else if (input.dataset.placeholder){ input.placeholder = input.dataset.placeholder; }
 }
 
 function stopVoice(discard = false){
@@ -604,12 +651,13 @@ function stopVoice(discard = false){
   recognizer.stop();
 }
 
-function startVoice(){
+function startVoice(target = VOICE_CHAT){
+  voiceTarget = target;
   if (!Recognition){
-    addMsg("error", "Цей браузер не підтримує голосове введення. Скористайтеся мікрофоном на клавіатурі телефона або відкрийте сторінку в Chrome чи Safari.");
+    target.error("Цей браузер не підтримує голосове введення. Скористайтеся мікрофоном на клавіатурі телефона або відкрийте сторінку в Chrome чи Safari.");
     return;
   }
-  const input = $("#input");
+  const input = $(target.input);
   const base = input.value.trim() ? input.value.trim() + " " : "";
   const r = new Recognition();
   r.lang = "uk-UA";
@@ -628,18 +676,21 @@ function startVoice(){
       "audio-capture": "Мікрофон не знайдено.",
       "network": "Розпізнавання мовлення недоступне: немає з'єднання.",
     }[e.error];
-    if (msg) addMsg("error", msg);
+    if (msg) target.error(msg);
   };
-  r.onend = () => { recognizer = null; setListening(false); input.focus(); };
-  try{ r.start(); }catch(err){ addMsg("error", "Не вдалося увімкнути мікрофон: " + err.message); return; }
+  r.onend = () => {
+    setListening(false, target);
+    if (recognizer === r){ recognizer = null; input.focus(); }  // могли вже ввімкнути мікрофон в іншому полі
+  };
+  try{ r.start(); }catch(err){ target.error("Не вдалося увімкнути мікрофон: " + err.message); return; }
   recognizer = r;
-  setListening(true);
+  setListening(true, target);
 }
 
 async function send(text){
   text = text.trim();
   if (!text || busy) return;
-  stopVoice(true);
+  if (voiceTarget === VOICE_CHAT) stopVoice(true);
   busy = true; $("#send").disabled = true;
   addMsg("user", text);
   $("#input").value = "";
@@ -1035,7 +1086,10 @@ async function addLineDialog(kind){
   showCatalogList();
 }
 $("#closeLine").onclick = () => $("#lineDlg").close();
-$("#mic").onclick = () => recognizer ? stopVoice() : startVoice();
+$("#mic").onclick = () => {
+  if (recognizer){ const same = voiceTarget === VOICE_CHAT; stopVoice(); if (same) return; }
+  startVoice(VOICE_CHAT);
+};
 
 // ---------- Фото VIN / одометра ----------
 async function shrinkPhoto(file){
@@ -1097,6 +1151,133 @@ $("#input").addEventListener("keydown", e => {
 });
 $("#hints").addEventListener("click", e => { if (e.target.dataset.manual !== undefined) newManualOrder(); });
 $("#btnOrders").onclick = showOrders;
+
+// ---------- Запис на сервіс (планувальник) ----------
+let bkStart = null;
+const isoDate = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const addDays = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return isoDate(d); };
+const ddmm = iso => iso.slice(8, 10) + "." + iso.slice(5, 7);
+const endTime = (t, m) => { const x = Number(t.slice(0, 2)) * 60 + Number(t.slice(3)) + m; return `${String(Math.floor(x / 60) % 24).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`; };
+
+async function showBookings(){
+  if (!$("#bookingsDlg").open){ $("#bookingsDlg").showModal(); bkStart = bkStart || isoDate(new Date()); }
+  $("#bkRange").textContent = `${ddmm(bkStart)} — ${ddmm(addDays(bkStart, 6))}`;
+  let data;
+  try{ data = await api(`/api/bookings?start=${bkStart}&days=7`); }
+  catch(e){ $("#bkDays").textContent = e.message; return; }
+  const today = isoDate(new Date());
+  const byId = {};
+  data.days.forEach(d => d.items.forEach(b => { byId[b.id] = b; }));
+  $("#bkDays").innerHTML = data.days.map(d => `<div class="bk-day ${d.date === today ? "today" : ""}">
+    <h4>${esc(d.weekday)} ${ddmm(d.date)}${d.date === today ? " · сьогодні" : ""}</h4>
+    ${d.items.length ? d.items.map(b => {
+      const off = b.status === "скасовано" || b.status === "не приїхав";
+      return `<div class="bk-item ${off ? "off" : ""}">
+        <div class="t">${esc(b.time)}<small>до ${endTime(b.time, b.duration_min)}</small></div>
+        <div><div class="who"><b>${esc(b.client_name)}</b>${b.phone ? ` <span class="sub">${esc(b.phone)}</span>` : ""}${b.car ? ` · ${esc(b.car)}` : ""}</div>
+          ${b.work ? `<div>${esc(b.work)}</div>` : ""}${b.note ? `<div class="sub">📝 ${esc(b.note)}</div>` : ""}
+          <div class="sub">${b.status !== "заплановано" ? `<span class="badge">${esc(b.status)}</span> ` : ""}${b.order_number ? `→ ${esc(b.order_number)} ` : ""}${b.created_by ? `записав(-ла) ${esc(b.created_by)}` : ""}</div>
+          ${b.overlaps.length ? `<div class="bk-warn">⚠ Накладка: ${b.overlaps.map(id => byId[id] ? `${esc(byId[id].time)} ${esc(byId[id].client_name)}` : "").join(", ")}</div>` : ""}</div>
+        ${b.status === "заплановано" ? `<div class="acts">
+          <button data-bk-order="${esc(b.id)}" class="primary">🚗 Приїхав → замовлення</button>
+          <button data-bk-edit="${esc(b.id)}">✎ Змінити</button>
+          <button data-bk-status="${esc(b.id)}:не приїхав">Не приїхав</button>
+          <button data-bk-status="${esc(b.id)}:скасовано">Скасувати</button></div>` : ""}
+      </div>`; }).join("") : `<div class="sub">—</div>`}</div>`).join("");
+  $("#bkDays").dataset.items = JSON.stringify(byId);
+}
+
+function bkLog(text, cls){
+  const div = document.createElement("div");
+  div.className = cls || "";
+  if (cls) div.textContent = text; else div.innerHTML = md(text);
+  $("#bkLog").appendChild(div);
+  while ($("#bkLog").children.length > 6) $("#bkLog").firstChild.remove();
+}
+
+$("#bkAgentForm").onsubmit = async e => {
+  e.preventDefault();
+  const text = $("#bkText").value.trim();
+  if (!text) return;
+  if (voiceTarget === VOICE_BOOKING) stopVoice(true);
+  $("#bkSend").disabled = true; $("#bkSend").textContent = "…";
+  bkLog(text, "me");
+  try{
+    const r = await api("/api/bookings/agent", {method: "POST", body: JSON.stringify({text, author: authorName()})});
+    $("#bkText").value = "";
+    bkLog(r.reply);
+    showBookings();
+  }catch(err){ bkLog(err.message, "err"); }
+  $("#bkSend").disabled = false; $("#bkSend").textContent = "Записати";
+};
+$("#bkText").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); $("#bkAgentForm").requestSubmit(); }
+});
+
+function bookingForm(b){
+  const today = isoDate(new Date());
+  $("#lineTitle").textContent = b ? "Змінити запис" : "Новий запис";
+  $("#lineBody").innerHTML = `<form class="form" id="bkForm" autocomplete="off">
+      <label for="bDate">Дата</label><input id="bDate" type="date" value="${esc(b ? b.date : bkStart > today ? bkStart : today)}" required>
+      <label for="bTime">Час</label><input id="bTime" type="time" value="${esc(b ? b.time : "10:00")}" step="300" required>
+      <label for="bDur">Тривалість, хв</label><input id="bDur" inputmode="numeric" value="${b ? b.duration_min : 60}">
+      <label for="bName">Клієнт</label><input id="bName" value="${esc(b ? b.client_name : "")}" required>
+      <label for="bPhone">Телефон</label><input id="bPhone" type="tel" value="${esc(b ? b.phone : "")}" placeholder="+380…">
+      <label for="bCar">Автомобіль</label><input id="bCar" value="${esc(b ? b.car : "")}" placeholder="Model Y, АА1234ВВ">
+      <label for="bWork">Що зробити</label><input id="bWork" value="${esc(b ? b.work : "")}">
+      <label for="bNote">Примітка</label><input id="bNote" value="${esc(b ? b.note : "")}">
+      <span></span><div><div class="form-err" id="lineErr" hidden></div>
+        <div class="form-actions"><button class="primary" type="submit">Зберегти</button><button type="button" id="lineCancel">Скасувати</button></div></div>
+    </form>`;
+  $("#lineDlg").showModal();
+  $("#lineCancel").onclick = () => $("#lineDlg").close();
+  $("#bkForm").onsubmit = async e => {
+    e.preventDefault();
+    const body = {date: $("#bDate").value, time: $("#bTime").value, duration_min: Number($("#bDur").value) || 60,
+                  client_name: $("#bName").value, phone: $("#bPhone").value, car: $("#bCar").value,
+                  work: $("#bWork").value, note: $("#bNote").value, author: authorName()};
+    try{
+      await api(b ? `/api/bookings/${b.id}` : "/api/bookings", {method: b ? "PUT" : "POST", body: JSON.stringify(body)});
+      $("#lineDlg").close();
+      showBookings();
+    }catch(err){ $("#lineErr").hidden = false; $("#lineErr").textContent = err.message; }
+  };
+  $("#bName").focus();
+}
+
+const VOICE_BOOKING = {input: "#bkText", mic: "#bkMic", error: msg => bkLog(msg, "err")};
+$("#bkMic").onclick = () => {
+  if (recognizer){ const same = voiceTarget === VOICE_BOOKING; stopVoice(); if (same) return; }
+  startVoice(VOICE_BOOKING);
+};
+$("#btnBookings").onclick = showBookings;
+$("#closeBookings").onclick = () => $("#bookingsDlg").close();
+$("#bookingsDlg").addEventListener("close", () => { if (voiceTarget === VOICE_BOOKING) stopVoice(); });
+$("#bookingsDlg").addEventListener("click", async e => {
+  const d = e.target.dataset;
+  if (d.bkNav !== undefined){ bkStart = d.bkNav === "0" ? isoDate(new Date()) : addDays(bkStart, Number(d.bkNav)); return showBookings(); }
+  if (d.bkNew !== undefined) return bookingForm(null);
+  const items = JSON.parse($("#bkDays").dataset.items || "{}");
+  if (d.bkEdit) return bookingForm(items[d.bkEdit]);
+  if (d.bkStatus){
+    const [id, status] = d.bkStatus.split(":");
+    const b = items[id];
+    if (!confirm(`${status === "скасовано" ? "Скасувати запис" : "Позначити «не приїхав»"}: ${b.time} ${b.client_name}?`)) return;
+    try{ await api(`/api/bookings/${id}/status`, {method: "POST", body: JSON.stringify({status, author: authorName()})}); showBookings(); }
+    catch(err){ alert(err.message); }
+    return;
+  }
+  if (d.bkOrder){
+    if (busy) return;
+    try{
+      const data = await api(`/api/bookings/${d.bkOrder}/order`, {method: "POST"});
+      $("#bookingsDlg").close(); $("#log").innerHTML = "";
+      addMsg("assistant", `Створено замовлення-наряд № ${data.order.number} за записом. Уточніть пробіг${data.order.vehicle.vin ? "" : " і VIN"} — тут або в панелі.`);
+      renderOrder(data.order);
+      document.querySelector('.tabs button[data-tab="order"]').click();
+    }catch(err){ alert(err.message); }
+  }
+});
 
 // ---------- База клієнтів і розсилка ----------
 let clientsData = null, clientsQuery = "", clientsFilter = "";
