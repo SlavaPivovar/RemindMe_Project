@@ -58,9 +58,9 @@ def test_agent_creates_booking_from_free_text(tmp_path, session):
     web = TestClient(create_app(orders_dir=session.store.dir, client=client, usage_path=tmp_path / "u.jsonl"))
     r = web.post("/api/bookings/agent", json={"text": "Петренко завтра о 10, ТО і стукіт спереду", "author": "Іван"})
     assert r.json()["reply"] == "Записав Петренка Петра на завтра о 10:00."
-    system = calls[0]["system"]
-    system = system if isinstance(system, str) else " ".join(x["text"] for x in system)
-    assert date.today().isoformat() in system and "Сьогодні" in system
+    # поточна дата — у повідомленні, а не в системному промпті (інакше промпт змінюється між репліками)
+    assert date.today().isoformat() in calls[0]["messages"][0]["content"]
+    assert date.today().isoformat() not in json.dumps(calls[0]["system"], ensure_ascii=False)
     found = json.loads(calls[1]["messages"][-1]["content"][0]["content"])
     assert found[0]["phone"] == "+380 67 123 45 67" and "Model Y" in found[0]["cars"][0]
     day = web.get(f"/api/bookings?start={TOMORROW}&days=1").json()["days"][0]
@@ -69,6 +69,7 @@ def test_agent_creates_booking_from_free_text(tmp_path, session):
     # друга репліка продовжує ту саму розмову
     web.post("/api/bookings/agent", json={"text": "підтверди", "author": "Іван"})
     assert len(calls[3]["messages"]) > 1
+    assert calls[3]["system"] == calls[0]["system"]  # той самий початок розмови — підписи thinking дійсні
     assert '"kind": "booking"' in (tmp_path / "u.jsonl").read_text(encoding="utf-8")
 
     # клієнт приїхав — замовлення-наряд створюється лише за кнопкою
@@ -133,4 +134,32 @@ def test_telegram_sync_and_client_notifications(tmp_path, session):
     assert "Сьогодні" in fake.sent("sendMessage")[-1]["text"] and "Завтра" in fake.sent("sendMessage")[-1]["text"]
     bot.handle_update({"update_id": 2, "message": {**msg, "text": "/zapys хто записаний на завтра?"}})
     assert fake.sent("sendMessage")[-1]["text"] == "Готово"
-    assert "[Іван]: хто записаний на завтра?" in json.dumps(calls[0]["messages"], ensure_ascii=False)
+    assert "· Іван]: хто записаний на завтра?" in json.dumps(calls[0]["messages"], ensure_ascii=False)
+
+
+def test_agent_recovers_from_rejected_history(tmp_path):
+    """Якщо API відхиляє історію (недійсний підпис thinking), розмова починається заново з цієї репліки."""
+    import anthropic
+    import httpx2
+    from anthropic import DefaultHttpxClient
+
+    replies = [_msg([{"type": "text", "text": "Перша"}], "end_turn"),
+               {"error": True},
+               _msg([{"type": "text", "text": "Друга"}], "end_turn")]
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        reply = replies[len(calls) - 1]
+        if reply.get("error"):
+            return httpx2.Response(400, json={"type": "error", "error": {
+                "type": "invalid_request_error",
+                "message": "messages.1.content.0: Invalid `signature` in `thinking` block."}})
+        return httpx2.Response(200, json=reply)
+
+    client = anthropic.Anthropic(api_key="t", http_client=DefaultHttpxClient(transport=httpx2.MockTransport(handler)))
+    agent = bk.BookingAgent(bk.BookingStore(None), client, "claude-opus-5-5")
+    assert agent.send("web:1", "перше")["reply"] == "Перша"
+    assert agent.send("web:1", "друге")["reply"] == "Друга"
+    assert len(calls[1]["messages"]) == 3 and len(calls[2]["messages"]) == 1
+    assert "друге" in calls[2]["messages"][0]["content"]
