@@ -176,7 +176,10 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .assignee{display:flex;align-items:center;gap:6px;margin:-4px 0 12px;font-size:13px;color:var(--muted)}
 .assignee input{font:inherit;font-size:13px;padding:5px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);min-width:0;width:240px;max-width:100%}
 .comment audio{display:block;width:100%;max-width:340px;height:36px;margin-top:4px}
-.bk-agent{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;padding-top:12px}
+.bk-agent{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:end;padding-top:12px}
+.bk-agent .mic{width:42px;height:42px;padding:0;display:grid;place-items:center}
+.bk-agent .mic svg{width:20px;height:20px}
+.bk-agent .mic.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);animation:pulse 1.4s ease-in-out infinite}
 .bk-agent textarea{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);resize:vertical;min-width:0}
 .bk-log{display:flex;flex-direction:column;gap:6px;margin:8px 0}
 .bk-log div{font-size:13px;padding:6px 10px;border-radius:8px;background:var(--bot)}
@@ -245,6 +248,8 @@ button.danger-lite{color:var(--accent)}
   main > .card.show{display:flex}
   .info{grid-template-columns:1fr}
   #catalogList .hide-m,#orderBody .hide-m,#clientsBody .hide-m{display:none}
+  .bk-agent textarea{grid-column:1 / -1;min-height:64px}
+  .bk-agent .mic{justify-self:end}
   #catalogList .show-m,#clientsBody .show-m{display:inline}
   #orderBody .show-m{display:block}
   #orderBody td.acts{white-space:nowrap}
@@ -319,7 +324,10 @@ button.danger-lite{color:var(--accent)}
   <div class="dh"><h2>Запис на сервіс</h2><button id="closeBookings">✕</button></div>
   <div class="db">
     <form class="bk-agent" id="bkAgentForm">
-      <textarea id="bkText" rows="2" placeholder="Напишіть як завгодно: «Петренко, Model Y, у пʼятницю о 10, ТО і стукіт спереду» або «перенеси Коваль на завтра 12:00»"></textarea>
+      <textarea id="bkText" rows="2" placeholder="Напишіть або надиктуйте 🎤: «Петренко, Model Y, у пʼятницю о 10, ТО і стукіт спереду» або «перенеси Коваль на завтра 12:00»"></textarea>
+      <button type="button" class="mic" id="bkMic" title="Голосове введення" aria-label="Голосове введення" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg>
+      </button>
       <button class="primary" id="bkSend">Записати</button>
     </form>
     <div id="bkLog" class="bk-log"></div>
@@ -624,12 +632,17 @@ async function api(path, opts = {}){
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognizer = null;
 
-function setListening(on){
-  $("#mic").classList.toggle("on", on);
-  $("#mic").setAttribute("aria-pressed", String(on));
-  $("#mic").title = on ? "Зупинити запис" : "Голосове введення";
-  $("#input").placeholder = on ? "Слухаю… говоріть"
-                               : "Клієнт, автомобіль, скарги… (Enter — надіслати, Shift+Enter — новий рядок)";
+// Голосове введення працює в чаті й у вікні «Запис»: ціль — поле, кнопка мікрофона й куди писати помилки.
+const VOICE_CHAT = {input: "#input", mic: "#mic", error: msg => addMsg("error", msg)};
+let voiceTarget = VOICE_CHAT;
+
+function setListening(on, target = voiceTarget){
+  const mic = $(target.mic), input = $(target.input);
+  mic.classList.toggle("on", on);
+  mic.setAttribute("aria-pressed", String(on));
+  mic.title = on ? "Зупинити запис" : "Голосове введення";
+  if (on){ input.dataset.placeholder = input.placeholder; input.placeholder = "Слухаю… говоріть"; }
+  else if (input.dataset.placeholder){ input.placeholder = input.dataset.placeholder; }
 }
 
 function stopVoice(discard = false){
@@ -638,12 +651,13 @@ function stopVoice(discard = false){
   recognizer.stop();
 }
 
-function startVoice(){
+function startVoice(target = VOICE_CHAT){
+  voiceTarget = target;
   if (!Recognition){
-    addMsg("error", "Цей браузер не підтримує голосове введення. Скористайтеся мікрофоном на клавіатурі телефона або відкрийте сторінку в Chrome чи Safari.");
+    target.error("Цей браузер не підтримує голосове введення. Скористайтеся мікрофоном на клавіатурі телефона або відкрийте сторінку в Chrome чи Safari.");
     return;
   }
-  const input = $("#input");
+  const input = $(target.input);
   const base = input.value.trim() ? input.value.trim() + " " : "";
   const r = new Recognition();
   r.lang = "uk-UA";
@@ -662,18 +676,21 @@ function startVoice(){
       "audio-capture": "Мікрофон не знайдено.",
       "network": "Розпізнавання мовлення недоступне: немає з'єднання.",
     }[e.error];
-    if (msg) addMsg("error", msg);
+    if (msg) target.error(msg);
   };
-  r.onend = () => { recognizer = null; setListening(false); input.focus(); };
-  try{ r.start(); }catch(err){ addMsg("error", "Не вдалося увімкнути мікрофон: " + err.message); return; }
+  r.onend = () => {
+    setListening(false, target);
+    if (recognizer === r){ recognizer = null; input.focus(); }  // могли вже ввімкнути мікрофон в іншому полі
+  };
+  try{ r.start(); }catch(err){ target.error("Не вдалося увімкнути мікрофон: " + err.message); return; }
   recognizer = r;
-  setListening(true);
+  setListening(true, target);
 }
 
 async function send(text){
   text = text.trim();
   if (!text || busy) return;
-  stopVoice(true);
+  if (voiceTarget === VOICE_CHAT) stopVoice(true);
   busy = true; $("#send").disabled = true;
   addMsg("user", text);
   $("#input").value = "";
@@ -1069,7 +1086,10 @@ async function addLineDialog(kind){
   showCatalogList();
 }
 $("#closeLine").onclick = () => $("#lineDlg").close();
-$("#mic").onclick = () => recognizer ? stopVoice() : startVoice();
+$("#mic").onclick = () => {
+  if (recognizer){ const same = voiceTarget === VOICE_CHAT; stopVoice(); if (same) return; }
+  startVoice(VOICE_CHAT);
+};
 
 // ---------- Фото VIN / одометра ----------
 async function shrinkPhoto(file){
@@ -1179,6 +1199,7 @@ $("#bkAgentForm").onsubmit = async e => {
   e.preventDefault();
   const text = $("#bkText").value.trim();
   if (!text) return;
+  if (voiceTarget === VOICE_BOOKING) stopVoice(true);
   $("#bkSend").disabled = true; $("#bkSend").textContent = "…";
   bkLog(text, "me");
   try{
@@ -1224,8 +1245,14 @@ function bookingForm(b){
   $("#bName").focus();
 }
 
+const VOICE_BOOKING = {input: "#bkText", mic: "#bkMic", error: msg => bkLog(msg, "err")};
+$("#bkMic").onclick = () => {
+  if (recognizer){ const same = voiceTarget === VOICE_BOOKING; stopVoice(); if (same) return; }
+  startVoice(VOICE_BOOKING);
+};
 $("#btnBookings").onclick = showBookings;
 $("#closeBookings").onclick = () => $("#bookingsDlg").close();
+$("#bookingsDlg").addEventListener("close", () => { if (voiceTarget === VOICE_BOOKING) stopVoice(); });
 $("#bookingsDlg").addEventListener("click", async e => {
   const d = e.target.dataset;
   if (d.bkNav !== undefined){ bkStart = d.bkNav === "0" ? isoDate(new Date()) : addDays(bkStart, Number(d.bkNav)); return showBookings(); }
