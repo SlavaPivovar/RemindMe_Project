@@ -29,6 +29,7 @@ from pathlib import Path
 
 import httpx
 
+from . import bookings as bk
 from .clients import phone_key as _phone_key
 from .comments import CommentError, CommentStore
 from .order import DRAFT, STATUSES, OrderStore, RepairOrder, StatusError, now_str
@@ -53,9 +54,12 @@ HELP = ("Я публікую сюди замовлення-наряди й зб�
         "• Голосове відповіддю на картку — голосовий коментар (прослухати можна й на сайті).\n"
         "• Кнопки під карткою: змінити статус і «👤 Беру собі» — стати відповідальним.\n"
         "• /orders — замовлення в роботі\n• /my — мої замовлення\n"
-        "• /order ЗН-2026-00001 — картка з коментарями")
+        "• /order ЗН-2026-00001 — картка з коментарями\n"
+        "• /zapys Петренко пт 10:00 ТО — записати клієнта (вільним текстом); /zapys — записи на сьогодні й завтра. "
+        "Відповідь на повідомлення про запис («перенеси на 12») — змінити його.")
 NEXT_STATUS = {"прийнято": ("в роботі", "🔧 В роботу"), "в роботі": ("готово", "✅ Готово"),
                "готово": ("видано", "🏁 Видано")}
+SCHEDULE_HOUR = 8  # о котрій (за Києвом) надсилати в групу записи на сьогодні
 SUMMARY_HOUR = 20  # о котрій (за Києвом) надсилати власнику підсумок дня
 STALE_DAYS = 2  # «довго в роботі» — понад стільки днів
 READY = "готово"
@@ -161,6 +165,8 @@ class TelegramBot:
         self.backup_chat_id = 0  # особистий чат власника для резервних копій (BACKUP_CHAT_ID)
         self.make_backup = None  # () -> (дані zip, info, ім'я файлу); задає web.py
         self.on_order_changed = None  # order -> None: зміна з Telegram (статус, відповідальний); задає web.py
+        self.bookings = None  # BookingStore; задає web.py
+        self.booking_agent = None  # BookingAgent; задає web.py
         self._username: str | None = None
 
     # --- зв'язок повідомлень із замовленнями (файл на диску) ---
@@ -179,6 +185,9 @@ class TelegramBot:
                 "ready_sent": data.get("ready_sent", {}),  # кому вже написали «автомобіль готовий»
                 "backup_date": data.get("backup_date", ""),
                 "summary_date": data.get("summary_date", ""),
+                "schedule_date": data.get("schedule_date", ""),
+                "bookings": data.get("bookings", {}),  # id запису -> {message_id, text}
+                "booking_msgs": data.get("booking_msgs", {}),  # message_id -> id запису
                 "broadcasts": data.get("broadcasts", [])}  # журнал розсилок
 
     def _save_links(self) -> None:
@@ -208,6 +217,11 @@ class TelegramBot:
         with self._lock:
             self._tasks.append(("comment", number, comment))
             self._dirty.add(number)
+        self._wake.set()
+
+    def booking_changed(self, kind: str, booking: dict) -> None:
+        with self._lock:
+            self._tasks.append(("booking", booking["id"], (kind, booking)))
         self._wake.set()
 
     def order_deleted(self, number: str) -> None:
@@ -301,6 +315,9 @@ class TelegramBot:
             link["assignee"] = order.assignee
 
     def _run_task(self, kind: str, number: str, payload) -> None:
+        if kind == "booking":
+            self._sync_booking(*payload)
+            return
         link = self.links["orders"].get(number)
         if kind == "comment" and link:
             text = f"💬 <b>{escape(payload['author'])}</b>: {escape(payload['text'])}"
@@ -369,6 +386,15 @@ class TelegramBot:
             self._show_order(text.split(maxsplit=1)[1] if " " in text else "")
         elif command == "/my":
             self._list_mine(msg.get("from", {}))
+        elif command in ("/zapys", "/zapis", "/booking"):
+            rest = text.split(maxsplit=1)[1].strip() if " " in text else ""
+            if rest:
+                self._booking_command(msg, rest)
+            else:
+                self.api.call("sendMessage", chat_id=self.chat_id, text=self.schedule_text(2), parse_mode="HTML")
+        elif text and not command and msg.get("reply_to_message") \
+                and str(msg["reply_to_message"]["message_id"]) in self.links["booking_msgs"]:
+            self._booking_command(msg, text, self.links["booking_msgs"][str(msg["reply_to_message"]["message_id"])])
         elif (msg.get("voice") or msg.get("audio")) and not command:
             self._voice_from(msg, text)
         elif msg.get("photo") and not command:
@@ -482,6 +508,130 @@ class TelegramBot:
         text = (f"Замовлення-наряди, де {name} — відповідальний:\n" + "\n".join(self._order_row(o) for o in mine)
                 if mine else f"{name}: зараз за вами немає замовлень у роботі. Натисніть «👤 Беру собі» під карткою.")
         self.api.call("sendMessage", chat_id=self.chat_id, text=text[:4000], parse_mode="HTML")
+
+    # --- запис на сервіс ---
+
+    @staticmethod
+    def booking_text(b: dict) -> str:
+        head = f"📅 <b>Запис</b> · {escape(bk.label(b))} ({b['duration_min']} хв)"
+        lines = [head, "👤 " + escape(" · ".join(x for x in (b["client_name"], b["phone"]) if x))]
+        if b["car"]:
+            lines.append(f"🚗 {escape(b['car'])}")
+        if b["work"]:
+            lines.append(f"🔧 {escape(b['work'])}")
+        if b["note"]:
+            lines.append(f"📝 {escape(b['note'])}")
+        if b["status"] == bk.CANCELLED:
+            lines = [f"❌ <s>{line}</s>" if i == 0 else f"<s>{line}</s>" for i, line in enumerate(lines)]
+            lines.append("<b>Скасовано</b>")
+        elif b["status"] != bk.PLANNED:
+            lines.append(f"<b>{escape(b['status'])}</b>" + (f" · {escape(b['order_number'])}" if b.get("order_number") else ""))
+        if b.get("created_by"):
+            lines.append(f"<i>записав(-ла) {escape(b['created_by'])}</i>")
+        return "\n".join(lines)[:4000]
+
+    def _sync_booking(self, kind: str, b: dict) -> None:
+        before = b.pop("_before", None)
+        moved = before is not None and (before["date"], before["time"]) != (b["date"], b["time"])
+        if self.chat_id:
+            text = self.booking_text(b)
+            link = self.links["bookings"].get(b["id"])
+            if link is None:
+                if kind == "created":
+                    message_id = self._send(text)
+                    self.links["bookings"][b["id"]] = {"message_id": message_id, "text": text}
+                    self.links["booking_msgs"][str(message_id)] = b["id"]
+            else:
+                if text != link["text"]:
+                    try:
+                        self.api.call("editMessageText", chat_id=self.chat_id, message_id=link["message_id"],
+                                      text=text, parse_mode="HTML")
+                    except TelegramError as exc:
+                        if "not modified" not in str(exc):
+                            raise
+                    link["text"] = text
+                note = None
+                if moved:
+                    note = f"🔁 Перенесено: {escape(bk.label(before))} → <b>{escape(bk.label(b))}</b>"
+                elif kind == "cancelled":
+                    note = f"❌ Запис {escape(bk.label(b))} · {escape(b['client_name'])} скасовано"
+                if note:
+                    reply = self._send(note, link["message_id"])
+                    self.links["booking_msgs"][str(reply)] = b["id"]
+        self._notify_client_booking(kind, b, moved)
+
+    def _notify_client_booking(self, kind: str, b: dict, moved: bool) -> None:
+        key = self.phone_key(b.get("phone", ""))
+        client = self.links["clients"].get(key) if key else None
+        if not client or client.get("blocked"):
+            return
+        place = ", ".join(x for x in (self.service_name, self.service_address) if x)
+        if kind == "created" and b["status"] == bk.PLANNED:
+            text = f"📅 Вас записано{(' до ' + self.service_name) if self.service_name else ''}: {bk.long_label(b)}."
+            if self.service_address:
+                text += f"\nАдреса: {self.service_address}."
+        elif moved and b["status"] == bk.PLANNED:
+            text = f"🔁 Ваш запис перенесено на {bk.long_label(b)}." + (f"\n{place}" if place else "")
+        elif kind == "cancelled":
+            text = f"Ваш запис на {bk.long_label(b)} скасовано. Якщо потрібно — запишемо на інший час."
+        else:
+            return
+        try:
+            self.api.call("sendMessage", chat_id=client["chat_id"], text=text)
+        except TelegramError:
+            log.exception("Telegram: не вдалося повідомити клієнта про запис")
+
+    def schedule_text(self, days: int = 1, start: datetime | None = None) -> str:
+        start = (start or datetime.now()).date()
+        parts = []
+        for i in range(days):
+            day = start + timedelta(days=i)
+            items = self.bookings.list(day.isoformat(), day.isoformat()) if self.bookings else []
+            today = datetime.now().date()
+            title = {today: "Сьогодні, ", today + timedelta(days=1): "Завтра, "}.get(day, "")
+            head = f"📅 <b>{title}{bk.WEEKDAYS[day.weekday()]} {day:%d.%m}</b>"
+            if not items:
+                parts.append(f"{head}\nзаписів немає")
+                continue
+            rows = [f"• <b>{escape(b['time'])}</b> {escape(b['client_name'])}"
+                    + (f" · {escape(b['car'])}" if b["car"] else "") + (f" — {escape(b['work'])}" if b["work"] else "")
+                    + ("" if b["status"] == bk.PLANNED else f" ({escape(b['status'])})") for b in items]
+            parts.append(head + "\n" + "\n".join(rows))
+        return "\n\n".join(parts)[:4000]
+
+    def _booking_command(self, msg: dict, text: str, booking_id: str | None = None) -> None:
+        if self.booking_agent is None:
+            return
+        if booking_id:
+            try:
+                b = self.bookings.get(booking_id)
+                text = f"(Йдеться про запис id={b['id']}: {bk.label(b)}, {b['client_name']}) {text}"
+            except KeyError:
+                pass
+        sender = msg.get("from", {})
+        try:
+            result = self.booking_agent.send(f"tg:{self.chat_id}:{sender.get('id')}", text, self.author(sender),
+                                             source="telegram")
+            reply = result["reply"] or "Готово."
+        except bk.BookingError as exc:
+            reply = str(exc)
+        except Exception:
+            log.exception("Помічник запису")
+            reply = "Не вдалося обробити запис — спробуйте ще раз або запишіть на сайті."
+        self.api.call("sendMessage", chat_id=self.chat_id, text=reply[:4000],
+                      reply_parameters={"message_id": msg["message_id"], "allow_sending_without_reply": True})
+        self._wake.set()
+
+    def schedule_tick(self) -> None:
+        now = datetime.now()
+        if not self.chat_id or self.bookings is None or now.hour < SCHEDULE_HOUR \
+                or self.links["schedule_date"] == now.strftime("%Y-%m-%d"):
+            return
+        if self.bookings.list(now.date().isoformat(), now.date().isoformat()):
+            self._send(self.schedule_text(1))
+        with self._lock:
+            self.links["schedule_date"] = now.strftime("%Y-%m-%d")
+            self._save_links()
 
     # --- кнопки під карткою в групі ---
 
@@ -832,7 +982,8 @@ class TelegramBot:
 
     def _schedule_loop(self) -> None:
         while not self._stop.is_set():
-            for name, tick in (("резервна копія", self.backup_tick), ("підсумок дня", self.summary_tick)):
+            for name, tick in (("резервна копія", self.backup_tick), ("підсумок дня", self.summary_tick),
+                               ("розклад записів", self.schedule_tick)):
                 try:
                     tick()
                 except Exception:
@@ -915,8 +1066,7 @@ class TelegramBot:
             log.exception("Telegram: deleteWebhook")
         threading.Thread(target=self._sender_loop, name="telegram-send", daemon=True).start()
         threading.Thread(target=self._poll_loop, name="telegram-poll", daemon=True).start()
-        if self.backup_chat_id:
-            threading.Thread(target=self._schedule_loop, name="telegram-schedule", daemon=True).start()
+        threading.Thread(target=self._schedule_loop, name="telegram-schedule", daemon=True).start()
 
     def stop(self) -> None:
         self._stop.set()

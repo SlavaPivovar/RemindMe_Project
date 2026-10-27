@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import datetime
 import hashlib
 import hmac
 import html
@@ -28,9 +29,11 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from pydantic import BaseModel
 
 from .assistant import MODEL, RepairOrderAssistant
+from . import bookings as bk
 from .backup import TELEGRAM_LIMIT, backup_filename, make_backup
 from .catalog import DEFAULT_CATALOG, MODEL_CODES, Catalog, CatalogError
 from .clients import build_clients, months_since, personalize
+from .clients import phone_key as bk_phone_key
 from .comments import CommentError, CommentStore
 from .excel import ExcelError, export_catalog, export_clients, import_catalog
 from .order import STATUSES, OrderStore, StatusError
@@ -64,6 +67,7 @@ class Conversation:
     last_used: float = field(default_factory=time.monotonic)
     pending_usage: dict = field(default_factory=empty_usage)  # витрати до появи замовлення-наряду
     manual_changes: list[str] = field(default_factory=list)  # правки з панелі, про які ще не знає помічник
+    channel: str = field(default_factory=lambda: secrets.token_hex(8))  # розмова з помічником запису
 
 
 class ChatIn(BaseModel):
@@ -133,6 +137,28 @@ class BroadcastIn(BaseModel):
     text: str
 
 
+class BookingAgentIn(BaseModel):
+    text: str
+    author: str = ""
+
+
+class BookingIn(BaseModel):
+    date: str | None = None
+    time: str | None = None
+    duration_min: int | None = None
+    client_name: str | None = None
+    phone: str | None = None
+    car: str | None = None
+    work: str | None = None
+    note: str | None = None
+    author: str = ""
+
+
+class BookingStatusIn(BaseModel):
+    status: str
+    author: str = ""
+
+
 class CommentIn(BaseModel):
     text: str
     author: str = ""
@@ -177,6 +203,7 @@ def create_app(
     secret: str | None = None,
     usage_path: str | Path | None = None,
     telegram=None,
+    bookings_path: str | Path | None = None,
 ) -> FastAPI:
     """password — пароль для входу; без нього вхід не потрібен (лише для локального запуску).
     catalog_path — файл довідника, який редагується з інтерфейсу; за його відсутності створюється
@@ -678,7 +705,7 @@ def create_app(
         return {**preview, "catalog": catalog_view() if apply else None}
 
     def backup(max_bytes: int | None = None):
-        extra = [p for p in (catalog.path, ledger.path, bot.links_path if bot else None) if p]
+        extra = [p for p in (catalog.path, ledger.path, bookings.path, bot.links_path if bot else None) if p]
         data, info = make_backup(Path(orders_dir), extra, max_bytes)
         return data, info, backup_filename(catalog.service.get("name", ""))
 
@@ -910,6 +937,107 @@ def create_app(
         messages = [(k, personalize(text, clients[k], catalog.service)) for k in keys if k in clients]
         return bot.broadcast(messages)
 
+    # --- запис на сервіс (планувальник) ---
+
+    bookings = bk.BookingStore(bookings_path)
+    booking_agent = bk.BookingAgent(bookings, client, model, clients=all_clients, service=catalog.service,
+                                    ledger=ledger)
+    if bot:
+        bookings.listeners.append(bot.booking_changed)
+        bot.bookings, bot.booking_agent = bookings, booking_agent
+
+    def booking_view(b: dict) -> dict:
+        return {**b, "label": bk.label(b), "overlaps": [x["id"] for x in bookings.overlaps(b)]
+                if b["status"] == bk.PLANNED else []}
+
+    @app.get("/api/bookings")
+    def bookings_list(start: str = "", days: int = 7):
+        try:
+            first = bk.parse_date(start) if start else datetime.date.today()
+        except bk.BookingError as exc:
+            raise HTTPException(400, str(exc)) from None
+        days = max(1, min(days, 31))
+        result = []
+        for i in range(days):
+            day = first + datetime.timedelta(days=i)
+            items = bookings.list(day.isoformat(), day.isoformat(), include_cancelled=True)
+            result.append({"date": day.isoformat(), "weekday": bk.WEEKDAYS[day.weekday()],
+                           "items": [booking_view(b) for b in items]})
+        return {"days": result, "statuses": bk.STATUSES, "telegram": bot is not None}
+
+    def booking_edit(action):
+        try:
+            return {"booking": booking_view(action())}
+        except bk.BookingError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except KeyError:
+            raise HTTPException(404, "Запис не знайдено") from None
+        except OSError:
+            raise HTTPException(500, "Не вдалося зберегти запис") from None
+
+    @app.post("/api/bookings/agent")
+    def bookings_agent(body: BookingAgentIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+        booking_agent.service = catalog.service
+        try:
+            with api_errors():
+                result = booking_agent.send(f"web:{conv.channel}", body.text, body.author.strip()[:80], source="web")
+        except bk.BookingError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {"reply": result["reply"] or "Готово."}
+
+    @app.post("/api/bookings/agent/reset")
+    def bookings_agent_reset(response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        booking_agent.reset(f"web:{conversation(tesla_ro_sid, response).channel}")
+        return {"ok": True}
+
+    @app.post("/api/bookings")
+    def booking_create(body: BookingIn):
+        data = body.model_dump(exclude={"author"}, exclude_none=True)
+        return booking_edit(lambda: bookings.create(data, by=body.author.strip(), source="web"))
+
+    @app.put("/api/bookings/{booking_id}")
+    def booking_update(booking_id: str, body: BookingIn):
+        data = body.model_dump(exclude={"author"}, exclude_none=True)
+        return booking_edit(lambda: bookings.update(booking_id, data, by=body.author.strip())[1])
+
+    @app.post("/api/bookings/{booking_id}/status")
+    def booking_status(booking_id: str, body: BookingStatusIn):
+        return booking_edit(lambda: bookings.set_status(booking_id, body.status, by=body.author.strip()))
+
+    @app.post("/api/bookings/{booking_id}/order")
+    def booking_to_order(booking_id: str, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        """Клієнт приїхав: нове замовлення-наряд із даними запису (лише на прохання співробітника)."""
+        try:
+            b = bookings.get(booking_id)
+        except KeyError:
+            raise HTTPException(404, "Запис не знайдено") from None
+        if b.get("order_number"):
+            raise HTTPException(409, f"За цим записом уже створено {b['order_number']}")
+        conv = conversation(tesla_ro_sid, response)
+        if conv.lock.locked():
+            raise HTTPException(409, "Помічник ще відповідає — спробуйте за мить")
+        restart(conv)
+        session = conv.session
+        session.new_order()
+        known = next((c for c in all_clients() if b["phone"] and c["key"] == bk_phone_key(b["phone"])), None)
+        session.set_customer(b["client_name"] or (known or {}).get("name", ""), b["phone"], (known or {}).get("email", ""))
+        car = None
+        if known:
+            words = b["car"].lower()
+            car = next((x for x in known["cars"] if x.get("vin") and (
+                (x.get("plate") and x["plate"].lower() in words) or (x.get("model") and x["model"].lower() in words)
+                or len(known["cars"]) == 1)), None)
+        if car:
+            with contextlib.suppress(ToolError):
+                session.set_vehicle(car["vin"], plate=car.get("plate", ""))
+        if b["work"]:
+            session.add_complaint(b["work"])
+        conv.manual_changes.append(f"створив замовлення-наряд за записом {bk.label(b)} ({b['client_name']}); "
+                                   "уточни пробіг і, якщо бракує, VIN")
+        bookings.set_status(booking_id, bk.ARRIVED, order_number=session.order.number)
+        return {"order": session.snapshot()}
+
     # --- фото до замовлення ---
 
     def extras(number: str) -> dict:
@@ -1015,7 +1143,7 @@ def main(argv: list[str] | None = None) -> int:
     catalog_path = args.catalog or data_dir / "catalog.json"
     app = create_app(catalog_path, args.orders_dir, model=args.model, effort=args.effort,
                      password=password, secure_cookies=secure, secret=load_secret(data_dir),
-                     usage_path=data_dir / "usage.jsonl",
+                     usage_path=data_dir / "usage.jsonl", bookings_path=data_dir / "bookings.json",
                      telegram=lambda store, comments: telegram_from_env(store, comments, data_dir))
     if app.state.telegram:
         app.state.telegram.start()
