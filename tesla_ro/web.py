@@ -6,6 +6,7 @@ import argparse
 import base64
 import contextlib
 import datetime
+from decimal import Decimal
 import hashlib
 import hmac
 import html
@@ -28,6 +29,7 @@ from fastapi import Cookie, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
+from .acts import INTAKE_ITEMS, ActError, Signatures, render_act_html, render_act_pdf, update_intake
 from .assistant import MODEL, RepairOrderAssistant
 from . import bookings as bk
 from .backup import TELEGRAM_LIMIT, backup_filename, make_backup
@@ -35,11 +37,13 @@ from .catalog import DEFAULT_CATALOG, MODEL_CODES, Catalog, CatalogError
 from .clients import build_clients, months_since, personalize
 from .clients import phone_key as bk_phone_key
 from .comments import CommentError, CommentStore
-from .excel import ExcelError, export_catalog, export_clients, import_catalog
-from .order import STATUSES, OrderStore, StatusError
+from .excel import ExcelError, export_catalog, export_clients, export_to_order, import_catalog
+from .order import (CANCELLED, DRAFT, PAYMENT_METHODS, STATUSES, OrderStore, PaymentError, StatusError, money,
+                    now_str)
 from .photos import KINDS as PHOTO_KINDS
 from .photos import PhotoError as GalleryError
 from .photos import PhotoStore
+from .stock import Stock, StockError
 from .render import PdfUnavailable, pdf_filename, render_html, render_pdf
 from .tools import OrderSession
 from .usage import UsageLedger
@@ -81,6 +85,30 @@ class PhotoIn(BaseModel):
 class StatusIn(BaseModel):
     status: str
     by: str = ""  # хто змінив (ім'я, яке співробітник указав на сайті)
+
+
+class PaymentIn(BaseModel):
+    amount: str
+    method: str = "готівка"
+    note: str = ""
+    by: str = ""
+
+
+class IntakeIn(BaseModel):
+    items: list[str] = []
+    left_inside: str = ""
+    damages: str = ""
+
+
+class SignatureIn(BaseModel):
+    image: str  # data:image/png;base64,...
+    signed_by: str = ""
+
+
+class StockIn(BaseModel):
+    qty: str
+    note: str = ""
+    by: str = ""
 
 
 class AssigneeIn(BaseModel):
@@ -204,6 +232,7 @@ def create_app(
     usage_path: str | Path | None = None,
     telegram=None,
     bookings_path: str | Path | None = None,
+    stock_path: str | Path | None = None,
 ) -> FastAPI:
     """password — пароль для входу; без нього вхід не потрібен (лише для локального запуску).
     catalog_path — файл довідника, який редагується з інтерфейсу; за його відсутності створюється
@@ -216,6 +245,8 @@ def create_app(
     ledger = UsageLedger(usage_path)
     comments = CommentStore(orders_dir)
     photos = PhotoStore(orders_dir)
+    stock = Stock(stock_path)
+    signatures = Signatures(orders_dir)
     # telegram — фабрика (store, comments) -> TelegramBot | None; бот бачить кожне збереження замовлення.
     bot = telegram(store, comments) if telegram else None
     if bot:
@@ -307,6 +338,7 @@ def create_app(
         session = OrderSession(catalog, store)
         session.comments = comments
         session.extras = extras
+        session.stock = stock
         return Conversation(session, RepairOrderAssistant(session, client=client, model=model, effort=effort))
 
     def conversation(sid: str | None, response: Response) -> Conversation:
@@ -342,6 +374,7 @@ def create_app(
                     history.append({"role": "assistant", "text": text})
         return {"order": conv.session.snapshot(), "history": history, "service": catalog.service,
                 "statuses": STATUSES, "telegram": bot is not None, "photo_kinds": PHOTO_KINDS,
+                "intake_items": INTAKE_ITEMS,
                 "backup_chat": bool(bot and bot.backup_chat_id),
                 "assignees": sorted({o.assignee for o in store.list() if o.assignee}),
                 "auth": password is not None}
@@ -506,6 +539,81 @@ def create_app(
                 order.assignee, order.assignee_tg = name, None
                 conv.session._autosave()
         return edit_order(conv, action, f"відповідальний: {name or 'не призначено'}")
+
+    # --- оплата, каса, боржники ---
+
+    @app.post("/api/order/payments")
+    def add_payment(body: PaymentIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+
+        def action():
+            try:
+                p = conv.session.order.add_payment(body.amount, body.method, body.by, body.note)
+            except PaymentError as exc:
+                raise ToolError(str(exc)) from None
+            conv.session._autosave()
+            return {"payment": p}
+        note = f"прийняв оплату {body.amount} $ ({body.method})"
+        return edit_order(conv, action, note)
+
+    # id — у параметрі запиту: шлях /api/order/<щось>/<n> уже зайнятий видаленням рядків замовлення.
+    @app.delete("/api/order/payments")
+    def delete_payment(payment_id: str, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+
+        def action():
+            try:
+                p = conv.session.order.remove_payment(payment_id)
+            except KeyError:
+                raise ToolError("Оплату не знайдено") from None
+            conv.session._autosave()
+            return {"removed": p}
+        return edit_order(conv, action, "видалив запис про оплату")
+
+    def payments_on(day: str):
+        """Оплати за день (day — дд.мм.рррр) з усіх замовлень-нарядів."""
+        rows = []
+        for o in store.list():
+            for p in o.payments:
+                if p["at"].startswith(day):
+                    rows.append({**p, "number": o.number, "client": o.customer.name,
+                                 "vehicle": " ".join(x for x in (o.vehicle.model, o.vehicle.plate) if x)})
+        return sorted(rows, key=lambda r: r["at"])
+
+    @app.get("/api/cash")
+    def cash(day: str = ""):
+        try:
+            d = bk.parse_date(day) if day else datetime.date.today()
+        except bk.BookingError as exc:
+            raise HTTPException(400, str(exc)) from None
+        rows = payments_on(d.strftime("%d.%m.%Y"))
+        by_method = {m: str(money(sum((Decimal(r["amount"]) for r in rows if r["method"] == m), Decimal("0"))))
+                     for m in PAYMENT_METHODS}
+        return {"day": d.isoformat(), "payments": rows, "by_method": by_method,
+                "total": str(money(sum((Decimal(r["amount"]) for r in rows), Decimal("0")))),
+                "methods": PAYMENT_METHODS}
+
+    def debts_list():
+        debts, overpaid = [], []
+        for o in store.list():
+            if o.status == DRAFT:
+                continue
+            balance = o.balance() if o.status != CANCELLED else -o.paid()
+            row = {"number": o.number, "created_at": o.created_at, "status": o.status, "client": o.customer.name,
+                   "phone": o.customer.phone, "vehicle": " ".join(x for x in (o.vehicle.model, o.vehicle.plate) if x),
+                   "total": str(o.totals()["total"]), "paid": str(o.paid()), "balance": str(balance),
+                   "last_payment": o.payments[-1]["at"] if o.payments else ""}
+            if o.status == "видано" and balance > 0:
+                debts.append(row)
+            elif balance < 0:
+                overpaid.append(row)
+        return debts, overpaid
+
+    @app.get("/api/debts")
+    def debts():
+        debts, overpaid = debts_list()
+        return {"debts": debts, "overpaid": overpaid,
+                "total": str(money(sum((Decimal(d["balance"]) for d in debts), Decimal("0"))))}
 
     def sync_open_orders(order) -> None:
         """Зміну з Telegram (статус, відповідальний) переносимо у відкриті на сайті копії замовлення,
@@ -705,7 +813,8 @@ def create_app(
         return {**preview, "catalog": catalog_view() if apply else None}
 
     def backup(max_bytes: int | None = None):
-        extra = [p for p in (catalog.path, ledger.path, bookings.path, bot.links_path if bot else None) if p]
+        extra = [p for p in (catalog.path, ledger.path, bookings.path, stock.path, stock.moves_path,
+                             bot.links_path if bot else None) if p]
         data, info = make_backup(Path(orders_dir), extra, max_bytes)
         return data, info, backup_filename(catalog.service.get("name", ""))
 
@@ -748,6 +857,8 @@ def create_app(
                 "total": str(o.totals()["total"]),
                 "currency": o.currency,
                 "ai_cost": o.ai_usage.get("cost_usd", 0),
+                "balance": str(o.balance()),
+                "payment_status": o.payment_status(),
                 "comments": comments.count(o.number),
             }
             for o in store.list()
@@ -1038,10 +1149,157 @@ def create_app(
         bookings.set_status(booking_id, bk.ARRIVED, order_number=session.order.number)
         return {"order": session.snapshot()}
 
+    # --- акт приймання автомобіля ---
+
+    @app.put("/api/order/intake")
+    def set_intake(body: IntakeIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+
+        def action():
+            try:
+                unsigned = update_intake(conv.session.order, body.model_dump())
+            except ActError as exc:
+                raise ToolError(str(exc)) from None
+            conv.session._autosave()
+            return {"unsigned": unsigned}
+        return edit_order(conv, action, "заповнив акт приймання автомобіля")
+
+    @app.post("/api/order/intake/sign")
+    def sign_intake(body: SignatureIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        conv = conversation(tesla_ro_sid, response)
+
+        def action():
+            order = conv.session.order
+            if not body.signed_by.strip():
+                raise ToolError("Вкажіть, хто підписує")
+            if not body.image.startswith("data:image/png;base64,"):
+                raise ToolError("Підпис має бути зображенням PNG")
+            try:
+                name = signatures.save(order.number, base64.b64decode(body.image.split(",", 1)[1], validate=True))
+            except (ActError, ValueError) as exc:
+                raise ToolError(str(exc) if isinstance(exc, ActError) else "Пошкоджене зображення підпису") from None
+            order.intake = {**order.intake, "signature": name, "signed_by": " ".join(body.signed_by.split())[:100],
+                            "signed_at": now_str()}
+            conv.session._autosave()
+        return edit_order(conv, action, "клієнт підписав акт приймання")
+
+    @app.get("/signatures/{name}")
+    def signature_image(name: str):
+        try:
+            return FileResponse(signatures.path(name), media_type="image/png")
+        except FileNotFoundError:
+            raise HTTPException(404, "Підпис не знайдено") from None
+
+    def act_parts(order):
+        shots = [(m, photos.dir_path(order.number, m)) for m in photos.list(order.number)
+                 if m.get("kind") in ("до", "пошкодження")][:9]
+        signature = None
+        if order.intake.get("signature"):
+            with contextlib.suppress(FileNotFoundError):
+                signature = signatures.path(order.intake["signature"])
+        return {"photos": shots, "signature": signature}
+
+    def saved_for_act(number: str):
+        try:
+            return store.load(number)
+        except FileNotFoundError:
+            raise HTTPException(404, "Замовлення-наряд ще не збережено — спершу заповніть його") from None
+
+    @app.get("/print/{number}/act", response_class=HTMLResponse)
+    def print_act(number: str):
+        order = saved_for_act(number)
+        return render_act_html(order, catalog.service, **act_parts(order))
+
+    @app.get("/pdf/{number}/act")
+    def pdf_act(number: str):
+        order = saved_for_act(number)
+        try:
+            pdf = render_act_pdf(order, catalog.service, **act_parts(order))
+        except PdfUnavailable:
+            raise HTTPException(503, "PDF недоступний на сервері — скористайтеся «Друк»") from None
+        name = quote(f"Акт приймання {order.number}.pdf")
+        return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f"inline; filename*=UTF-8''{name}"})
+
+    if bot:
+        bot.render_act = lambda order: render_act_pdf(order, catalog.service, **act_parts(order))
+
+    # --- склад запчастин ---
+
+    def stock_listener(order) -> None:
+        low = stock.sync_order(order, catalog.parts)
+        if low and bot:
+            bot.stock_low([stock_row(p) for p in low if p in catalog.parts])
+
+    store.listeners.append(stock_listener)
+    if bot:
+        bot.stock, bot.stock_parts = stock, lambda: catalog.parts
+
+    def reserved() -> dict[str, float]:
+        """Скільки запчастин уже вписано в замовлення, які ще не видано (прийнято, в роботі, готово)."""
+        result: dict[str, float] = {}
+        for o in store.list():
+            if o.status in ("прийнято", "в роботі", "готово"):
+                for line in o.parts:
+                    result[line.part_no] = result.get(line.part_no, 0) + line.qty
+        return result
+
+    def stock_row(part_no: str, booked: dict | None = None) -> dict:
+        p = catalog.parts[part_no]
+        qty, minimum = stock.qty(part_no), stock.min(part_no)
+        res = round((booked or {}).get(part_no, 0), 3)
+        return {"part_no": part_no, "name": p.name, "unit": p.unit, "price": p.price, "qty": qty, "min": minimum,
+                "reserved": res, "free": round(qty - res, 3), "low": stock.is_low(part_no)}
+
+    @app.get("/api/stock")
+    def stock_view():
+        booked = reserved()
+        return {"items": [stock_row(p, booked) for p in catalog.parts]}
+
+    def stock_edit(part_no: str, action):
+        if part_no not in catalog.parts:
+            raise HTTPException(404, "Немає такої запчастини в довіднику")
+        try:
+            action()
+        except StockError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except OSError:
+            raise HTTPException(500, "Не вдалося зберегти склад") from None
+        return {"item": stock_row(part_no, reserved())}
+
+    @app.post("/api/stock/{part_no}/receive")
+    def stock_receive(part_no: str, body: StockIn):
+        return stock_edit(part_no, lambda: stock.receive(part_no, body.qty, body.by, body.note))
+
+    @app.post("/api/stock/{part_no}/adjust")
+    def stock_adjust(part_no: str, body: StockIn):
+        return stock_edit(part_no, lambda: stock.adjust(part_no, body.qty, body.by, body.note or "інвентаризація"))
+
+    @app.put("/api/stock/{part_no}/min")
+    def stock_min(part_no: str, body: StockIn):
+        return stock_edit(part_no, lambda: stock.set_min(part_no, body.qty))
+
+    @app.get("/api/stock/{part_no}/moves")
+    def stock_moves(part_no: str):
+        return stock.moves(part_no)
+
+    @app.get("/api/stock/to-order.xlsx")
+    def stock_to_order():
+        booked = reserved()
+        rows = [stock_row(p, booked) for p in catalog.parts]
+        rows = [r for r in rows if r["low"] or r["free"] < 0]
+        return Response(export_to_order(rows),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''zamovyty-{time.strftime('%Y-%m-%d')}.xlsx"})
+
     # --- фото до замовлення ---
 
     def extras(number: str) -> dict:
-        return {"photos": photos.list(number), "approval": bot.approval(number) if bot else None}
+        try:
+            parts = {line.part_no for line in store.load(number).parts if line.part_no in catalog.parts}
+        except (FileNotFoundError, ValueError):
+            parts = set()
+        return {"photos": photos.list(number), "approval": bot.approval(number) if bot else None,
+                "stock": {p: stock.qty(p) for p in parts}}
 
     @app.get("/api/orders/{number}/extras")
     def order_extras(number: str):
@@ -1144,6 +1402,7 @@ def main(argv: list[str] | None = None) -> int:
     app = create_app(catalog_path, args.orders_dir, model=args.model, effort=args.effort,
                      password=password, secure_cookies=secure, secret=load_secret(data_dir),
                      usage_path=data_dir / "usage.jsonl", bookings_path=data_dir / "bookings.json",
+                     stock_path=data_dir / "stock.json",
                      telegram=lambda store, comments: telegram_from_env(store, comments, data_dir))
     if app.state.telegram:
         app.state.telegram.start()

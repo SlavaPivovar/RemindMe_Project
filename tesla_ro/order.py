@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -25,6 +26,13 @@ CANCELLED = "скасовано"
 STATUSES = (DRAFT, "прийнято", "в роботі", "готово", "видано", CANCELLED)
 # Статуси попередніх версій програми.
 LEGACY_STATUSES = {"відкрито": "прийнято", "виконано": "готово", "закрито": "видано"}
+
+
+PAYMENT_METHODS = ("готівка", "картка", "переказ")
+
+
+class PaymentError(ValueError):
+    """Оплату не можна записати; текст показується користувачу."""
 
 
 class StatusError(ValueError):
@@ -107,6 +115,10 @@ class RepairOrder:
     status_log: list[dict] = field(default_factory=list)  # [{"status": ..., "at": "дд.мм.рррр гг:хх", "by": хто}]
     assignee: str = ""  # відповідальний майстер
     assignee_tg: int | None = None  # його Telegram id, якщо призначився кнопкою в групі
+    # Оплати: [{"id", "at", "amount" (рядок, «-» — повернення), "method", "by", "note"}]
+    payments: list[dict] = field(default_factory=list)
+    # Акт приймання автомобіля: {"items": [...], "left_inside", "damages", "signed_at", "signed_by", "signature"}
+    intake: dict = field(default_factory=dict)
     ai_usage: dict = field(default_factory=dict)  # витрати на Claude по цьому замовленню (див. usage.py)
 
     def set_status(self, status: str, by: str = "") -> None:
@@ -133,6 +145,42 @@ class RepairOrder:
             grand = subtotal + vat
         return {"labor": money(labor), "parts": money(parts), "vat": vat, "total": money(grand)}
 
+    def paid(self) -> Decimal:
+        return money(sum((Decimal(p["amount"]) for p in self.payments), Decimal("0")))
+
+    def balance(self) -> Decimal:
+        """Скільки ще має сплатити клієнт (від'ємне — переплата)."""
+        return money(self.totals()["total"] - self.paid())
+
+    def payment_status(self) -> str:
+        paid, balance = self.paid(), self.balance()
+        if balance < 0:
+            return "переплата"
+        if balance == 0 and (paid > 0 or self.totals()["total"] > 0):
+            return "оплачено"
+        return "частково" if paid > 0 else "не оплачено"
+
+    def add_payment(self, amount, method: str, by: str = "", note: str = "") -> dict:
+        try:
+            value = money(Decimal(str(amount).replace(",", ".").replace(" ", "")))
+        except (ArithmeticError, ValueError):
+            raise PaymentError("Сума має бути числом") from None
+        if value == 0 or abs(value) > Decimal("10000000"):
+            raise PaymentError("Вкажіть суму оплати (від'ємна — повернення клієнту)")
+        if method not in PAYMENT_METHODS:
+            raise PaymentError(f"Спосіб оплати: {', '.join(PAYMENT_METHODS)}")
+        payment = {"id": secrets.token_hex(4), "at": now_str(), "amount": str(value), "method": method,
+                   "by": by.strip()[:80], "note": note.strip()[:200]}
+        self.payments.append(payment)
+        return payment
+
+    def remove_payment(self, payment_id: str) -> dict:
+        payment = next((p for p in self.payments if p["id"] == payment_id), None)
+        if payment is None:
+            raise KeyError(payment_id)
+        self.payments.remove(payment)
+        return payment
+
     def missing_fields(self) -> list[str]:
         missing = []
         if not self.customer.name:
@@ -152,12 +200,15 @@ class RepairOrder:
     def to_dict(self) -> dict:
         data = asdict(self)
         data["totals"] = {k: str(v) for k, v in self.totals().items()}
+        data["paid"], data["balance"] = str(self.paid()), str(self.balance())
+        data["payment_status"] = self.payment_status()
         return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "RepairOrder":
         data = dict(data)
-        data.pop("totals", None)
+        for key in ("totals", "paid", "balance", "payment_status"):
+            data.pop(key, None)
         data["customer"] = Customer(**data.get("customer", {}))
         data["vehicle"] = Vehicle(**data.get("vehicle", {}))
         data["labor"] = [LaborLine.from_dict(x) for x in data.get("labor", [])]

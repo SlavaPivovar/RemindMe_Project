@@ -195,3 +195,19 @@ def export_clients(clients: list[dict]) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def export_to_order(rows: list[dict]) -> bytes:
+    """Що замовити: запчастини, яких на складі не більше мінімуму або не вистачає під замовлення."""
+    wb = Workbook()
+    wb.remove(wb.active)
+    columns = [(None, "Артикул", 18), (None, "Назва", 50), (None, "Залишок", 10), (None, "У резерві", 10),
+               (None, "Мінімум", 10), (None, "Замовити", 10), (None, "Одиниця", 10)]
+    data = []
+    for r in rows:
+        need = max(r["min"] * 2 - r["free"], r["min"] - r["free"], -r["free"], 1)  # поповнити до двох мінімумів
+        data.append([r["part_no"], r["name"], r["qty"], r["reserved"], r["min"], round(need, 3), r["unit"]])
+    _sheet(wb, "Замовити", columns, data)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

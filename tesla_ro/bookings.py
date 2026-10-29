@@ -207,7 +207,7 @@ SYSTEM_PROMPT = """\
 пишуть тобі у вільній формі (часто коротко, надиктовано голосом), а ти ведеш планувальник записів:
 створюєш, переносиш, змінюєш і скасовуєш записи. Відповідай українською, дуже коротко.
 
-Сьогодні: {today}. Зараз: {now}.
+Поточні дата й час указано на початку кожного повідомлення співробітника — рахуй дати від них.
 
 Правила:
 - Запис — це дата, час, клієнт і що треба зробити (вільним текстом). Тривалість — 60 хв, якщо не
@@ -376,10 +376,40 @@ class BookingAgent:
         self._lock = threading.Lock()
 
     def _system(self) -> str:
-        now = datetime.now()
+        # Системний промпт не змінюється впродовж розмови: блоки міркувань (thinking) у історії
+        # підписані для конкретного початку розмови, і API відхиляє їх, якщо промпт інший.
+        # Тому поточний час іде в повідомлення, а не сюди.
         name = self.service.get("name", "")
-        return (SYSTEM_PROMPT.replace("{service}", f" {name}" if name else "")
-                .replace("{today}", f"{WEEKDAYS[now.weekday()]}, {now:%Y-%m-%d}").replace("{now}", f"{now:%H:%M}"))
+        return SYSTEM_PROMPT.replace("{service}", f" {name}" if name else "")
+
+    @staticmethod
+    def _stamp(author: str, text: str) -> str:
+        now = datetime.now()
+        return f"[{WEEKDAYS[now.weekday()]}, {now:%Y-%m-%d} {now:%H:%M} · {author or 'Співробітник'}]: {text}"
+
+    def _run(self, thread: dict, content: str, author: str, source: str, cost: dict):
+        messages = thread["messages"]
+        start = len(messages)
+        try:
+            messages.append({"role": "user", "content": content})
+            tools = BookingTools(self.store, self.clients, author, source)
+            runner = self.client.beta.messages.tool_runner(
+                model=self.model, max_tokens=4000, system=thread["system"],
+                tools=[beta_tool(m) for m in tools.tool_methods()], messages=list(messages),
+                thinking={"type": "adaptive"}, output_config={"effort": self.effort},
+                betas=["server-side-fallback-2026-07-01"], fallbacks="default")
+            last = None
+            for message in runner:
+                last = message
+                usage_mod.add(cost, usage_mod.from_response(message.usage, message.model))
+                messages.append({"role": "assistant", "content": message.content})
+                tool_response = runner.generate_tool_call_response()
+                if tool_response is not None:
+                    messages.append(tool_response)
+            return last
+        except Exception:
+            del messages[start:]
+            raise
 
     def reset(self, channel: str) -> None:
         with self._lock:
@@ -393,32 +423,21 @@ class BookingAgent:
         with self._lock:
             thread = self._threads.get(channel)
             if thread is None or time.monotonic() - thread["used"] > self.IDLE or len(thread["messages"]) > self.MAX_MESSAGES:
-                thread = self._threads[channel] = {"messages": [], "used": 0, "lock": threading.Lock()}
+                thread = self._threads[channel] = {"messages": [], "used": 0, "lock": threading.Lock(),
+                                                   "system": self._system()}
             thread["used"] = time.monotonic()
         if not thread["lock"].acquire(blocking=False):
             raise BookingError("Помічник ще обробляє попереднє повідомлення")
-        messages = thread["messages"]
-        start = len(messages)
         cost = usage_mod.empty()
         try:
-            messages.append({"role": "user", "content": f"[{author or 'Співробітник'}]: {text}"})
-            tools = BookingTools(self.store, self.clients, author, source)
-            runner = self.client.beta.messages.tool_runner(
-                model=self.model, max_tokens=4000, system=self._system(),
-                tools=[beta_tool(m) for m in tools.tool_methods()], messages=list(messages),
-                thinking={"type": "adaptive"}, output_config={"effort": self.effort},
-                betas=["server-side-fallback-2026-07-01"], fallbacks="default")
-            last = None
-            for message in runner:
-                last = message
-                usage_mod.add(cost, usage_mod.from_response(message.usage, message.model))
-                messages.append({"role": "assistant", "content": message.content})
-                tool_response = runner.generate_tool_call_response()
-                if tool_response is not None:
-                    messages.append(tool_response)
-        except Exception:
-            del messages[start:]
-            raise
+            try:
+                last = self._run(thread, self._stamp(author, text), author, source, cost)
+            except anthropic.BadRequestError as exc:
+                if "signature" not in str(exc) and "thinking" not in str(exc):
+                    raise
+                # Історію з цією розмовою API не приймає — починаємо розмову заново з цієї репліки.
+                thread["messages"], thread["system"] = [], self._system()
+                last = self._run(thread, self._stamp(author, text), author, source, cost)
         finally:
             thread["lock"].release()
             if self.ledger is not None:
