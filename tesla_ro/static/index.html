@@ -288,12 +288,74 @@ button.danger-lite{color:var(--accent)}
   #orderBody .show-m{display:block}
   #orderBody td.acts{white-space:nowrap}
   #catalogList th,#catalogList td{padding:6px 4px}
+  #catalogList td.acts{white-space:normal;width:44px}
+  #catalogList td.acts button{display:block;margin:0 0 4px auto}
   .form{grid-template-columns:1fr;gap:4px}
   #send{width:48px;padding:0;display:flex;align-items:center;justify-content:center;flex:none}
   #send .send-label{display:none}
   #send .send-icon{display:block}
   .form label{padding-top:8px}
   header .label{display:none}
+}
+
+/* ---- телефон і сенсорні екрани ---- */
+#btnMenu{display:none}
+.menu{position:fixed;top:56px;right:12px;z-index:50;display:flex;flex-direction:column;min-width:240px;padding:6px;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18)}
+.menu[hidden]{display:none}
+.menu button{border:0;text-align:left;padding:12px 14px;font-size:16px;background:transparent}
+.menu button:hover{background:var(--bg)}
+.menu .menu-logout{border-top:1px solid var(--line);border-radius:0;margin-top:4px;color:var(--muted)}
+.obar{position:sticky;top:0;z-index:5;margin:-16px -20px 12px;padding:8px 20px;background:var(--panel);border-bottom:1px solid var(--line);
+  display:none;flex-direction:column;gap:6px}
+.obar.show{display:flex}
+.obar .line{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font-size:14px}
+.obar .due{color:var(--accent);font-weight:600}
+.obar nav{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+.obar nav::-webkit-scrollbar{display:none}
+.obar nav button{white-space:nowrap;font-size:13px;padding:5px 11px;border-radius:999px}
+#orderBody [id^="sec-"]{scroll-margin-top:96px}
+details.fold{margin:6px 0 4px}
+details.fold>summary{cursor:pointer;list-style:none;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;padding:8px 0}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::before{content:"▸ ";display:inline-block;width:1em}
+details.fold[open]>summary::before{content:"▾ "}
+.ocards{display:flex;flex-direction:column;gap:8px}
+.ocard{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;cursor:pointer;background:var(--panel)}
+.ocard:active{background:var(--bg)}
+.ocard .top{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.ocard .sum{text-align:right;font-weight:600;white-space:nowrap}
+.ocard .acts{grid-column:1 / -1;display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
+@media (max-width:900px){
+  header > button:not(#btnNew):not(#btnMenu){display:none}
+  #btnMenu{display:inline-flex}
+  header .label{display:inline}
+  header h1 span:not(#brand){display:none}
+  .seg{flex-wrap:wrap}
+  .seg button{flex:1 1 40%}
+  .assignee label{white-space:nowrap}
+  .desc-m{display:none}
+  form.composer{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:6px}
+}
+@media (max-width:380px){
+  /* вузькі Android: поле введення на всю ширину, кнопки під ним праворуч */
+  form.composer textarea{grid-column:1 / -1;grid-row:1}
+  #photoBtn{grid-column:2;grid-row:2} #mic{grid-column:3;grid-row:2} #send{grid-column:4;grid-row:2}
+  form.composer .mic, #send{height:44px}
+}
+/* iPhone збільшує сторінку, якщо в полі шрифт менший за 16 px */
+@media (max-width:900px), (pointer:coarse){
+  input, select, textarea{font-size:16px !important}
+}
+/* Пальцем — щонайменше ~40 px */
+@media (max-width:900px), (pointer:coarse){
+  #orderBody button, #orderBody select, dialog button, .filter-chips button, .sec-head button{min-height:40px}
+  #orderBody button, #orderBody td.acts button, .plain-edit button, [data-photo-del], [data-pay-del], .catalog-acts button,
+  #catalogList td button, #stockTable td button{min-width:40px}
+  #orderBody .status{min-height:40px}
+  input[type=checkbox]{width:22px;height:22px}
+  .photo label{min-height:36px}
+  .comment a{display:inline-block;padding:8px 0}
 }
 </style>
 </head>
@@ -307,7 +369,16 @@ button.danger-lite{color:var(--accent)}
   <button id="btnCash" title="Каса й боржники">💰 <span class="label">Каса</span></button>
   <button id="btnNew" title="Почати нове замовлення-наряд">＋ <span class="label">Нове</span></button>
   <button id="btnLogout" title="Вийти" hidden>⎋ <span class="label">Вийти</span></button>
+  <button id="btnMenu" aria-haspopup="true" aria-expanded="false">☰ Меню</button>
 </header>
+<nav id="menuPanel" class="menu" hidden aria-label="Меню">
+  <button data-proxy="#btnOrders">📁 Збережені замовлення</button>
+  <button data-proxy="#btnBookings">📅 Запис на сервіс</button>
+  <button data-proxy="#btnClients">👥 Клієнти</button>
+  <button data-proxy="#btnCash">💰 Каса й боржники</button>
+  <button data-proxy="#btnCatalog">📚 Довідник і склад</button>
+  <button data-proxy="#btnLogout" class="menu-logout" id="menuLogout" hidden>⎋ Вийти</button>
+</nav>
 <div class="tabs"><button data-tab="chat" class="on">Чат</button><button data-tab="order">Замовлення-наряд</button></div>
 <main>
   <section id="chat" class="card show">
@@ -442,10 +513,12 @@ function setAuthorName(v){ try{ localStorage.setItem("author", v); }catch(e){} }
 function renderComments(list){
   const box = $("#internalBox");
   if (!box || !currentOrder) return;
+  currentOrder.comments = list;
+  renderOrderBar(currentOrder);
   const typing = document.activeElement && document.activeElement.id === "cText" ? $("#cText").value : "";
   box.dataset.count = list.length;
   box.innerHTML = `<h3>💬 Внутрішні коментарі${list.length ? " · " + list.length : ""}</h3>
-    <div class="sub" style="margin:-4px 0 10px">Лише для співробітників — у друковану форму не потрапляють.${TELEGRAM ? " Також з'являються в Telegram-групі, а відповіді там — тут." : ""}</div>
+    <div class="sub desc-m" style="margin:-4px 0 10px">Лише для співробітників — у друковану форму не потрапляють.${TELEGRAM ? " Також з'являються в Telegram-групі, а відповіді там — тут." : ""}</div>
     <div class="comments">${list.map(c => `<div class="comment">
         <div class="meta"><b>${esc(c.author)}</b> · ${esc(c.at)} · ${c.source === "telegram" ? "📱 Telegram" : "🖥 сайт"}</div>
         <div>${esc(c.text).replace(/\n/g, "<br>")}</div>${c.voice ? `<audio controls preload="none" src="/voice/${encodeURIComponent(currentOrder.number)}/${esc(c.voice.file)}"></audio>
@@ -488,6 +561,31 @@ setInterval(async () => {
     }
   }catch(e){}
 }, 20000);
+
+// ---------- Закріплена смужка замовлення: сума, оплата, переходи до розділів ----------
+let obarObserver = null;
+function renderOrderBar(o){
+  const bar = $("#obar");
+  if (!bar) return;
+  const due = Number(o.balance);
+  const count = (n, label) => n ? `${label} ${n}` : label;
+  bar.innerHTML = `<div class="line"><b>№ ${esc(o.number.replace(/^ЗН-\d{4}-0*/, ""))}</b>
+      <span class="badge ${stClass(o.status)}">${esc(o.status)}</span>
+      <span>${num(o.totals.total)} ${esc(o.currency)}</span>${due > 0 && Number(o.paid) > 0 || (due > 0 && o.status === "видано") ? `<span class="due">до сплати ${num(due)}</span>` : o.payment_status === "оплачено" ? `<span class="pay-st ok">оплачено</span>` : ""}</div>
+    <nav><button data-jump="sec-client">Клієнт</button><button data-jump="sec-works">${count(o.labor.length + o.parts.length, "Роботи")}</button>
+      <button data-jump="sec-pay">Оплата</button><button data-jump="sec-photos">${count((o.photos || []).length, "Фото")}</button>
+      <button data-jump="sec-comments">${count((o.comments || []).length, "Коментарі")}</button></nav>`;
+  // Смужку видно, щойно заголовок замовлення сховався при прокручуванні.
+  if (obarObserver) obarObserver.disconnect();
+  obarObserver = new IntersectionObserver(([e]) => bar.classList.toggle("show", !e.isIntersecting), {root: $("#order"), threshold: 0});
+  obarObserver.observe(document.querySelector("#orderBody .ohead"));
+}
+document.addEventListener("click", e => {
+  const id = e.target.dataset && e.target.dataset.jump;
+  if (!id) return;
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({behavior: "smooth", block: "start"});
+});
 
 // ---------- Акт приймання автомобіля ----------
 function renderIntake(o){
@@ -601,7 +699,7 @@ function renderPayments(o){
       <input id="payNote" placeholder="Примітка (необов'язково)" aria-label="Примітка">
       <button class="primary">Прийняти оплату</button>
     </form>
-    <div class="hint">Передоплату теж вносьте тут. Повернення клієнту — сума з мінусом.</div>`;
+    <div class="hint desc-m">Передоплату теж вносьте тут. Повернення клієнту — сума з мінусом.</div>`;
   $("#payForm").onsubmit = async e => {
     e.preventDefault();
     const amount = $("#payAmount").value.trim().replace(/\s/g, "").replace(",", ".");
@@ -644,11 +742,12 @@ function renderPhotos(list){
   const box = $("#photoBox");
   if (!box || !currentOrder) return;
   currentOrder.photos = list;
+  renderOrderBar(currentOrder);
   const n = encodeURIComponent(currentOrder.number);
   const kind = box.dataset.kind || "до";
   const toClient = list.filter(p => p.to_client).length;
   box.innerHTML = `<h3>📷 Фото${list.length ? " · " + list.length : ""}</h3>
-    <div class="sub" style="margin:-4px 0 10px">До й після ремонту, пошкодження. Позначені «клієнту» бот надсилає разом із PDF${toClient ? ` (зараз: ${toClient})` : ""}.${TELEGRAM ? " Фото відповіддю на картку в Telegram-групі теж потрапляють сюди." : ""}</div>
+    <div class="sub desc-m" style="margin:-4px 0 10px">До й після ремонту, пошкодження. Позначені «клієнту» бот надсилає разом із PDF${toClient ? ` (зараз: ${toClient})` : ""}.${TELEGRAM ? " Фото відповіддю на картку в Telegram-групі теж потрапляють сюди." : ""}</div>
     ${list.length ? `<div class="photos">${list.map(p => `<div class="photo">
         <a href="/photos/${n}/${esc(p.id)}" target="_blank" rel="noopener" title="${esc(p.author)} · ${esc(p.at)}"><img loading="lazy" alt="Фото: ${esc(p.kind)}" src="/photos/${n}/${esc(p.id)}"></a>
         <div class="pc"><select data-photo-kind="${esc(p.id)}" aria-label="Тип фото">${PHOTO_KINDS.map(k => `<option ${k === p.kind ? "selected" : ""}>${esc(k)}</option>`).join("")}</select>
@@ -721,6 +820,7 @@ function renderOrder(o){
     : `<tr><td colspan="8" style="color:var(--muted)">—</td></tr>`;
   const vat = o.prices_include_vat ? `у т.ч. ПДВ ${esc(o.vat_percent)}%` : `ПДВ ${esc(o.vat_percent)}%`;
   box.innerHTML = `
+    <div class="obar" id="obar"></div>
     <div class="ohead">
       <h2>№ ${esc(o.number)}</h2>
       <select class="status ${stClass(o.status)}" id="statusSel" title="Статус замовлення-наряду">
@@ -735,7 +835,7 @@ function renderOrder(o){
       <datalist id="assigneeList">${[...new Set([...ASSIGNEES, authorName()].filter(Boolean))].map(n => `<option value="${esc(n)}">`).join("")}</datalist></div>
     <div id="approvalBox" hidden></div>
     ${o.missing_fields.length ? `<div class="missing">Не заповнено: ${o.missing_fields.map(esc).join(", ")}</div>` : `<div class="done">✓ Усі обов'язкові поля заповнено</div>`}
-    <div class="sec-head"><h3>Замовник і автомобіль</h3><button data-edit-head title="Змінити замовника й автомобіль">✎ Змінити</button></div>
+    <div class="sec-head" id="sec-client"><h3>Замовник і автомобіль</h3><button data-edit-head title="Змінити замовника й автомобіль">✎ Змінити</button></div>
     <div class="info">
       <dl><dt>Замовник</dt><dd>${dash(c.name)}</dd><dt>Телефон</dt><dd>${dash(c.phone)}</dd><dt>E-mail</dt><dd>${dash(c.email)}</dd></dl>
       <dl><dt>Автомобіль</dt><dd>${v.model ? "Tesla " + esc(v.model) + " " + dash(v.year) : "—"}</dd><dt>VIN</dt><dd>${dash(v.vin)}</dd>
@@ -743,19 +843,19 @@ function renderOrder(o){
           ${v.color ? `<dt>Колір</dt><dd>${esc(v.color)}</dd>` : ""}${v.battery_percent != null ? `<dt>Заряд ВВБ</dt><dd>${esc(v.battery_percent)}%</dd>` : ""}</dl>
     </div>
     <div class="intake" id="intakeBox"></div>
-    ${o.history && o.history.length ? `<h3>Історія автомобіля · ${o.history.length === 10 ? "останні 10 візитів" : "візитів: " + o.history.length}</h3>
+    ${o.history && o.history.length ? `<details class="fold" id="histFold"><summary>Історія автомобіля · ${o.history.length === 10 ? "останні 10 візитів" : "візитів: " + o.history.length}</summary>
       <div class="visits">${o.history.map(h => `<div class="visit">
         <div class="visit-head"><b>${esc(h.date.split(" ")[0])}</b><span class="sub">№ ${esc(h.number)} · ${esc(h.status)}${h.odometer_km != null ? " · " + Number(h.odometer_km).toLocaleString("uk-UA") + " км" : ""}</span>
           <span class="sum">${num(h.total)} ${esc(h.currency)} <button data-print-visit="${esc(h.number)}" title="Друк">🖨</button></span></div>
         ${h.works.length ? `<div>${h.works.map(esc).join(", ")}</div>` : ""}
         ${h.recommendations.length ? `<ul>${h.recommendations.map(r => `<li class="rec">${esc(r)}</li>`).join("")}</ul>` : ""}
-      </div>`).join("")}</div>` : ""}
+      </div>`).join("")}</div></details>` : ""}
     <h3>Скарги клієнта</h3>
     ${textList(o.complaints, "complaints")}
     <form class="inline-add" data-add-text="complaints"><input placeholder="Додати скаргу…" aria-label="Нова скарга"><button>＋</button></form>
     <div class="sec-head"><h3>Діагностика</h3><button data-edit-diag title="Змінити">✎</button></div>
     <div>${o.diagnosis ? esc(o.diagnosis).replace(/\n/g, "<br>") : `<span class="sub">—</span>`}</div>
-    <h3>Роботи</h3>
+    <h3 id="sec-works">Роботи</h3>
     <div class="tbl"><table><tr><th class="hide-m">№</th><th class="hide-m">Код</th><th>Найменування</th><th class="r hide-m">Кількість</th><th class="r hide-m">Ціна</th><th class="r hide-m">Знижка</th><th class="r">Сума</th><th></th></tr>${lines(o.labor, true)}</table></div>
     <div class="line-add"><button data-add-line="labor">＋ Додати роботу</button></div>
     <h3>Запчастини та матеріали</h3>
@@ -767,12 +867,13 @@ function renderOrder(o){
       ${Number(o.vat_percent) ? `<div><span>${vat}</span><span>${num(t.vat)} ${cur}</span></div>` : ""}
       <div class="grand"><span>Разом</span><span>${num(t.total)} ${cur}</span></div>
     </div>
-    <div class="pay" id="payBox"></div>
+    <div id="sec-pay"></div><div class="pay" id="payBox"></div>
     <h3>Рекомендації</h3>
     ${textList(o.recommendations, "recommendations")}
     <form class="inline-add" data-add-text="recommendations"><input placeholder="Додати рекомендацію…" aria-label="Нова рекомендація"><button>＋</button></form>
-    <div class="internal" id="photoBox"></div>
-    <div class="internal" id="internalBox"></div>`;
+    <div id="sec-photos"></div><div class="internal" id="photoBox"></div>
+    <div id="sec-comments"></div><div class="internal" id="internalBox"></div>`;
+  renderOrderBar(o);
   $("#assigneeInp").onchange = async e => {
     const name = e.target.value.trim();
     try{
@@ -907,6 +1008,16 @@ async function showOrders(){
     if (q) params.set("q", q);
     if (ordersStatus) params.set("status", ordersStatus);
     const list = await api("/api/orders" + (params.toString() ? "?" + params : ""));
+    if (list.length && matchMedia("(max-width: 900px)").matches){
+      // На телефоні — картки: уся картка відкриває замовлення, нічого не ховається за край екрана.
+      $("#ordersList").innerHTML = `<div class="ocards">${list.map(o => `<div class="ocard" data-open="${esc(o.number)}" role="button" tabindex="0">
+          <div class="top"><b>${esc(o.number)}</b><span class="badge ${stClass(o.status)}">${esc(o.status)}</span>${o.comments ? `<span class="cc">💬${o.comments}</span>` : ""}</div>
+          <div class="sum">${num(o.total)} ${esc(o.currency)}</div>
+          <div class="sub">${dash(o.customer)}${o.vehicle ? " · " + esc(o.vehicle) : ""}</div>
+          <div class="sub" style="text-align:right">${o.status === "видано" && Number(o.balance) > 0 ? `<span style="color:var(--accent)">борг ${num(o.balance)}</span>` : o.payment_status === "оплачено" ? `<span style="color:var(--ok)">оплачено</span>` : esc(o.created_at.split(" ")[0])}</div>
+        </div>`).join("")}</div>`;
+      return;
+    }
     $("#ordersList").innerHTML = list.length ? `<div class="tbl"><table>
       <tr><th>Номер</th><th>Дата</th><th>Клієнт</th><th>Автомобіль</th><th class="r">Сума</th><th>Статус</th><th class="r" title="Витрати на Claude">Claude</th><th></th></tr>
       ${list.map(o => `<tr><td>${esc(o.number)}${o.comments ? ` <span class="cc" title="Внутрішні коментарі">💬${o.comments}</span>` : ""}</td><td>${esc(o.created_at)}</td><td>${dash(o.customer)}</td><td>${dash(o.vehicle)}</td>
@@ -923,9 +1034,10 @@ $("#statusFilter").onclick = e => {
 };
 $("#ordersQuery").oninput = () => { clearTimeout(ordersTimer); ordersTimer = setTimeout(showOrders, 250); };
 $("#ordersList").addEventListener("click", async e => {
-  const open = e.target.dataset.open, print = e.target.dataset.print;
-  if (print) window.open("/print/" + encodeURIComponent(print), "_blank");
+  const print = e.target.dataset.print;
+  if (print) return void window.open("/print/" + encodeURIComponent(print), "_blank");
   if (e.target.dataset.delOrder){ if (await deleteOrder(e.target.dataset.delOrder)) showOrders(); return; }
+  const open = e.target.closest("[data-open]")?.dataset.open;
   if (open){
     const data = await api(`/api/orders/${encodeURIComponent(open)}/open`, {method: "POST"});
     $("#ordersDlg").close();
@@ -1636,6 +1748,25 @@ let SERVICE_ADDRESS = "";
 const catalogAddress = () => SERVICE_ADDRESS;
 
 $("#btnClients").onclick = showClients;
+
+// ---------- Меню на телефоні ----------
+function toggleMenu(open){
+  const panel = $("#menuPanel");
+  open = open ?? panel.hidden;
+  panel.hidden = !open;
+  $("#btnMenu").setAttribute("aria-expanded", String(open));
+  $("#menuLogout").hidden = $("#btnLogout").hidden;
+  if (open) panel.querySelector("button").focus();
+}
+$("#btnMenu").onclick = e => { e.stopPropagation(); toggleMenu(); };
+$("#menuPanel").onclick = e => {
+  const target = e.target.closest("[data-proxy]");
+  if (!target) return;
+  toggleMenu(false);
+  $(target.dataset.proxy).click();
+};
+document.addEventListener("click", e => { if (!$("#menuPanel").hidden && !e.target.closest("#menuPanel")) toggleMenu(false); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#menuPanel").hidden) toggleMenu(false); });
 $("#closeClients").onclick = () => $("#clientsDlg").close();
 $("#clientsBody").addEventListener("click", async e => {
   const d = e.target.dataset;
@@ -1783,13 +1914,13 @@ function renderOpsTable(){
   const ops = catalogData.operations.filter(o => (!catCategory || o.category === catCategory) &&
     words.every(w => `${o.code} ${o.name} ${o.category} ${o.parts.map(p => p.name).join(" ")}`.toLowerCase().includes(w)));
   if (!ops.length){ $("#opsTable").innerHTML = `<div class="empty">Нічого не знайдено.</div>`; return; }
-  let html = `<div class="tbl"><table><tr><th>Робота</th><th class="hide-m">Моделі</th><th class="r">Ціна роботи</th><th class="r">Запчастини</th><th></th></tr>`;
+  let html = `<div class="tbl"><table><tr><th>Робота</th><th class="hide-m">Моделі</th><th class="r">Ціна роботи</th><th class="r hide-m">Запчастини</th><th></th></tr>`;
   let last = null;
   for (const o of [...ops].sort((a, b) => catalogData.categories.indexOf(a.category) - catalogData.categories.indexOf(b.category))){
     if (o.category !== last){ html += `<tr class="cat-row"><td colspan="5">${esc(o.category)}</td></tr>`; last = o.category; }
     html += `<tr><td>${esc(o.name)}<div class="sub">${esc(o.code)}${o.interval ? " · " + esc(o.interval) : ""}${o.parts.length ? " · " + o.parts.map(p => esc(p.name)).join(", ") : ""}<span class="show-m"> · ${esc(o.models)}</span></div></td>
       <td class="hide-m">${esc(o.models)}</td>
-      <td class="r">${num(o.price)} ${cur}</td><td class="r">${o.parts.length ? num(o.parts_price) + " " + cur : "—"}</td>
+      <td class="r">${num(o.price)} ${cur}${o.parts.length ? `<div class="sub show-m">+ запч. ${num(o.parts_price)}</div>` : ""}</td><td class="r hide-m">${o.parts.length ? num(o.parts_price) + " " + cur : "—"}</td>
       <td class="r acts"><button data-edit-op="${esc(o.code)}" title="Редагувати">✎</button> <button data-add="${esc(o.code)}" title="Додати до замовлення-наряду">＋</button></td></tr>`;
   }
   $("#opsTable").innerHTML = html + "</table></div>";
