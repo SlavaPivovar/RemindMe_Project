@@ -102,5 +102,8 @@ class PhotoStore:
             raise KeyError(photo_id)
         return self._dir(number) / item["file"]
 
+    def dir_path(self, number: str, item: dict) -> Path:
+        return self._dir(number) / item["file"]
+
     def for_client(self, number: str) -> list[tuple[dict, Path]]:
         return [(x, self._dir(number) / x["file"]) for x in self._read(number) if x.get("to_client")]

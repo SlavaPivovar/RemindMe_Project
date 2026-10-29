@@ -42,6 +42,7 @@ class OrderSession:
         self.order: RepairOrder | None = None
         self.comments = None  # CommentStore: внутрішні коментарі для панелі (див. web.py)
         self.extras = None  # number -> dict: фото, погодження тощо для панелі (див. web.py)
+        self.stock = None  # Stock: залишки на складі для пошуку запчастин (див. web.py)
 
     @property
     def _order(self) -> RepairOrder:
@@ -259,7 +260,10 @@ class OrderSession:
         Args:
             query: Ключові слова або артикул.
         """
-        return _json([p.__dict__ for p in self.catalog.search_parts(query)])
+        parts = [p.__dict__ for p in self.catalog.search_parts(query)]
+        if self.stock is not None:
+            parts = [{**p, "in_stock": self.stock.qty(p["part_no"])} for p in parts]
+        return _json(parts)
 
     # --- рядки замовлення ---
 

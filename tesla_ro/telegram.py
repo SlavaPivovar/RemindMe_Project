@@ -24,6 +24,7 @@ import secrets
 import threading
 import time
 from datetime import datetime, timedelta
+from decimal import Decimal
 from html import escape
 from pathlib import Path
 
@@ -159,12 +160,15 @@ class TelegramBot:
         self._stop = threading.Event()
         self.links = self._load_links()
         self.render_pdf = None  # order -> bytes; задає web.py (друкована форма у PDF)
+        self.render_act = None  # order -> bytes: акт приймання у PDF; задає web.py
         self.service_name = ""
         self.service_address = ""
         self.photos = None  # PhotoStore; задає web.py
         self.backup_chat_id = 0  # особистий чат власника для резервних копій (BACKUP_CHAT_ID)
         self.make_backup = None  # () -> (дані zip, info, ім'я файлу); задає web.py
         self.on_order_changed = None  # order -> None: зміна з Telegram (статус, відповідальний); задає web.py
+        self.stock = None  # Stock; задає web.py
+        self.stock_parts = None  # () -> довідник запчастин
         self.bookings = None  # BookingStore; задає web.py
         self.booking_agent = None  # BookingAgent; задає web.py
         self._username: str | None = None
@@ -222,6 +226,14 @@ class TelegramBot:
     def booking_changed(self, kind: str, booking: dict) -> None:
         with self._lock:
             self._tasks.append(("booking", booking["id"], (kind, booking)))
+        self._wake.set()
+
+    def stock_low(self, items: list[dict]) -> None:
+        """Залишок запчастин опустився до мінімуму — написати в групу."""
+        if not self.chat_id or not items:
+            return
+        with self._lock:
+            self._tasks.append(("stock", "", items))
         self._wake.set()
 
     def order_deleted(self, number: str) -> None:
@@ -305,7 +317,10 @@ class TelegramBot:
             icon = STATUS_ICON.get(order.status, "📌")
             last = order.status_log[-1] if order.status_log else {}
             by = f" · {escape(last['by'])}" if last.get("status") == order.status and last.get("by") else ""
-            reply = self._send(f"{icon} {escape(number)}: статус «<b>{escape(order.status)}</b>»{by}", link["message_id"])
+            debt = order.balance()
+            warn = f" · ⚠️ борг {money(debt)} {escape(order.currency)}" if order.status == "видано" and debt > 0 else ""
+            reply = self._send(f"{icon} {escape(number)}: статус «<b>{escape(order.status)}</b>»{by}{warn}",
+                               link["message_id"])
             self._remember(reply, number)
             link["status"] = order.status
         if order.assignee != link.get("assignee", ""):
@@ -317,6 +332,11 @@ class TelegramBot:
     def _run_task(self, kind: str, number: str, payload) -> None:
         if kind == "booking":
             self._sync_booking(*payload)
+            return
+        if kind == "stock":
+            rows = [f"• {escape(i['name'])} ({escape(i['part_no'])}) — залишилось <b>{i['qty']:g} {escape(i['unit'])}</b>"
+                    f" (мін. {i['min']:g})" for i in payload]
+            self._send("📦 <b>Закінчується на складі:</b>\n" + "\n".join(rows))
             return
         link = self.links["orders"].get(number)
         if kind == "comment" and link:
@@ -728,6 +748,9 @@ class TelegramBot:
         """Надіслати PDF (і фото, позначені «клієнту») клієнту, який уже підключився до бота."""
         client = self._client_or_raise(order)
         self._send_order_document(client["chat_id"], order)
+        if order.intake.get("signature") and self.render_act:
+            self.api.send_document(client["chat_id"], f"Акт приймання {order.number}.pdf", self.render_act(order),
+                                   f"Акт приймання автомобіля до замовлення-наряду № {order.number}")
         sent = self._send_client_photos(client["chat_id"], order.number)
         note = f"📤 {escape(order.number)}: надіслано клієнту в Telegram" + (f" (фото: {sent})" if sent else "")
         self._note_in_group(order.number, note)
@@ -749,13 +772,23 @@ class TelegramBot:
                              reply_markup: dict | None = None) -> int | None:
         if caption is None:
             caption = (f"Замовлення-наряд № {order.number}" + (f" · {self.service_name}" if self.service_name else "")
-                       + f"\nРазом до сплати: {money(order.totals()['total'])} {order.currency}")
+                       + self._to_pay(order))
         if self.render_pdf:
             result = self.api.send_document(chat_id, f"Замовлення-наряд {order.number}.pdf", self.render_pdf(order),
                                             caption, reply_markup=reply_markup)
         else:
             result = self.api.call("sendMessage", chat_id=chat_id, text=caption, reply_markup=reply_markup)
         return result.get("message_id") if isinstance(result, dict) else None
+
+    @staticmethod
+    def _to_pay(order: RepairOrder) -> str:
+        """«Разом до сплати» з урахуванням передоплати."""
+        cur, paid, balance = order.currency, order.paid(), order.balance()
+        if paid <= 0:
+            return f"\nРазом до сплати: {money(order.totals()['total'])} {cur}"
+        if balance <= 0:
+            return f"\nСума: {money(order.totals()['total'])} {cur}, сплачено повністю"
+        return f"\nСума: {money(order.totals()['total'])} {cur}, сплачено {money(paid)} {cur}, до сплати: {money(balance)} {cur}"
 
     # --- погодження кошторису ---
 
@@ -888,7 +921,7 @@ class TelegramBot:
         v = order.vehicle
         car = " ".join(x for x in (f"Tesla {v.model}" if v.model else "Tesla", f"({v.plate})" if v.plate else "") if x)
         lines = [f"✅ Ваш автомобіль {car} готовий!",
-                 f"Замовлення-наряд № {order.number}. До сплати: {money(order.totals()['total'])} {order.currency}."]
+                 f"Замовлення-наряд № {order.number}." + self._to_pay(order).replace("\n", " ") + "."]
         place = ", ".join(x for x in (self.service_name, self.service_address) if x)
         if place:
             lines.append(f"Чекаємо на вас: {place}.")
@@ -954,16 +987,33 @@ class TelegramBot:
         for o in active:
             load[o.assignee or "без відповідального"] = load.get(o.assignee or "без відповідального", 0) + 1
 
+        cash: dict[str, Decimal] = {}
+        for o in orders:
+            for p in o.payments:
+                if p["at"].startswith(today):
+                    cash[p["method"]] = cash.get(p["method"], Decimal("0")) + Decimal(p["amount"])
+        debts = [o for o in orders if o.status == "видано" and o.balance() > 0]
+
         unique = lambda items: len({o.number for o in items})  # noqa: E731
         lines = [f"📊 <b>Підсумок дня {today}</b>" + (f" · {escape(self.service_name)}" if self.service_name else ""),
                  f"📥 Прийнято: {unique(events['прийнято'])}",
                  f"✅ Готово: {unique(events['готово'])}",
                  f"🏁 Видано: {unique(events['видано'])} · на суму <b>{money(revenue)} $</b>",
+                 f"💵 Отримано: <b>{money(sum(cash.values(), Decimal('0')))} $</b>"
+                 + (" (" + ", ".join(f"{escape(m)} {money(v)}" for m, v in cash.items()) + ")" if cash else ""),
                  f"🔧 Зараз у роботі: {len(active)}"]
+        if debts:
+            lines.append(f"⚠️ Борги клієнтів: {money(sum((o.balance() for o in debts), Decimal('0')))} $ "
+                         f"({len(debts)} замовл.) — " + ", ".join(escape(o.number) for o in debts[:8]))
         if load:
             lines.append("👤 " + "; ".join(f"{escape(k)}: {v}" for k, v in sorted(load.items(), key=lambda x: -x[1])))
         if pending:
             lines.append(f"📝 Чекають погодження клієнтом: {len(pending)} — " + ", ".join(escape(n) for n in pending[:10]))
+        if self.stock is not None and self.stock_parts is not None:
+            low = [p for p in self.stock_parts().values() if self.stock.is_low(p.part_no)]
+            if low:
+                lines.append(f"📦 Треба замовити ({len(low)}): " + ", ".join(
+                    f"{escape(p.name)} — {self.stock.qty(p.part_no):g}" for p in low[:10]))
         if stale:
             lines.append(f"⏰ Довго в роботі (понад {STALE_DAYS} дн.):")
             lines += [f"• {escape(o.number)} · {days} дн. · "

@@ -47,7 +47,7 @@ def build_clients(orders: list[RepairOrder], telegram: dict | None = None) -> li
         if key is None:
             continue
         c = clients.setdefault(key, {"key": key, "name": "", "phone": "", "email": "", "cars": {}, "orders": [],
-                                     "visits": 0, "spent": Decimal("0"), "last_visit": "", "first_visit": ""})
+                                     "visits": 0, "spent": Decimal("0"), "debt": Decimal("0"), "last_visit": "", "first_visit": ""})
         cust = order.customer
         c["name"] = cust.name or c["name"]
         c["phone"] = cust.phone or c["phone"]
@@ -68,12 +68,14 @@ def build_clients(orders: list[RepairOrder], telegram: dict | None = None) -> li
             c["spent"] += total
             c["last_visit"] = order.created_at
             c["first_visit"] = c["first_visit"] or order.created_at
+        if order.status == "видано" and order.balance() > 0:
+            c["debt"] += order.balance()
 
     for key, tg in telegram.items():
         c = clients.get(key)
         if c is None:  # підключився до бота, але його замовлень уже немає (видалені)
             c = clients[key] = {"key": key, "name": tg.get("name", ""), "phone": "", "email": "", "cars": {},
-                                "orders": [], "visits": 0, "spent": Decimal("0"), "last_visit": "", "first_visit": ""}
+                                "orders": [], "visits": 0, "spent": Decimal("0"), "debt": Decimal("0"), "last_visit": "", "first_visit": ""}
         c["telegram"] = {"name": tg.get("name", ""), "at": tg.get("at", ""), "blocked": bool(tg.get("blocked"))}
 
     result = []
@@ -82,6 +84,7 @@ def build_clients(orders: list[RepairOrder], telegram: dict | None = None) -> li
         c["cars"] = sorted(c["cars"].values(), key=lambda x: _date(x.get("last_visit", "")), reverse=True)
         c["orders"].reverse()  # нові згори
         c["spent"] = str(c["spent"].quantize(Decimal("0.01")))
+        c["debt"] = str(c["debt"].quantize(Decimal("0.01")))
         c["last_order"] = c["orders"][0]["date"] if c["orders"] else ""
         result.append(c)
     result.sort(key=lambda c: _date(c["last_order"] or (c["telegram"] or {}).get("at", "")), reverse=True)

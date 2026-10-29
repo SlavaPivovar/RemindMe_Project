@@ -186,6 +186,7 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .bk-log div.me{background:transparent;color:var(--muted);padding:0 2px}
 .bk-log div.err{background:var(--warn-bg);color:var(--warn)}
 .bk-nav{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:10px 0}
+.bk-nav input[type=date]{font:inherit;padding:6px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
 .bk-nav .bk-new{margin-left:auto}
 .bk-day{margin-bottom:12px}
 .bk-day h4{margin:0 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
@@ -198,6 +199,34 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .bk-item.off{opacity:.55}
 .bk-item.off .who{text-decoration:line-through}
 .bk-warn{color:var(--warn);font-size:12px}
+.pay{margin-top:14px;border:1px solid var(--line);border-radius:12px;padding:4px 14px 12px}
+.pay h3{margin-top:10px}
+.pay-st{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--warn-bg);color:var(--warn)}
+.pay-st.ok{background:transparent;color:var(--ok);border:1px solid var(--ok)}
+.pay-st.part{background:var(--bot);color:var(--text)}
+.pay-list{display:flex;flex-direction:column;gap:4px;margin:6px 0;font-size:13px}
+.pay-list div{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center}
+.pay-list span:first-child{color:var(--muted);white-space:nowrap}
+.pay-list b.neg{color:var(--warn)}
+.pay-list button{padding:1px 7px;font-size:12px}
+.pay-sum{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;margin:8px 0;font-size:14px}
+.pay-sum .due{color:var(--accent)}
+.pay-form{display:grid;grid-template-columns:110px auto minmax(0,1fr) auto;gap:6px}
+.pay-form input,.pay-form select{font:inherit;font-size:14px;padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);min-width:0}
+.cash-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:10px 0}
+.cash-tiles div{background:var(--bg);border-radius:10px;padding:8px 12px}
+.cash-tiles b{display:block;font-size:18px}
+.stock-low,.sub.stock-low{color:var(--accent)}
+.intake{margin:4px 0 6px;border:1px solid var(--line);border-radius:12px;padding:2px 14px 12px}
+.intake h3{margin-top:10px}
+.intake-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.intake-sig{display:flex;align-items:center;gap:10px;margin-top:6px}
+.intake-sig img{height:44px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:2px}
+.intake-items{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 12px}
+.intake-items input:not([type]){grid-column:1 / -1;margin-top:4px}
+.sign-pad canvas{width:100%;height:200px;background:#fff;border:1px dashed var(--muted);border-radius:10px;touch-action:none;display:block;margin:8px 0 4px}
+.sign-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.sign-row input{flex:1;min-width:160px;font:inherit;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
 .tg{font-size:12px;white-space:nowrap;color:var(--ok)}
 .tg.off{color:var(--muted)}
 tr.click{cursor:pointer}
@@ -247,10 +276,15 @@ button.danger-lite{color:var(--accent)}
   main > .card{display:none}
   main > .card.show{display:flex}
   .info{grid-template-columns:1fr}
-  #catalogList .hide-m,#orderBody .hide-m,#clientsBody .hide-m{display:none}
+  #catalogList .hide-m,#orderBody .hide-m,#clientsBody .hide-m,#cashBody .hide-m{display:none}
   .bk-agent textarea{grid-column:1 / -1;min-height:64px}
+  .pay-form{grid-template-columns:1fr 1fr}
+  .pay-form #payNote{grid-column:1 / -1}
+  .pay-form button{grid-column:1 / -1}
+  .pay-list div{grid-template-columns:minmax(0,1fr) auto auto}
+  .pay-list span:first-child{grid-column:1 / -1}
   .bk-agent .mic{justify-self:end}
-  #catalogList .show-m,#clientsBody .show-m{display:inline}
+  #catalogList .show-m,#clientsBody .show-m,#cashBody .show-m{display:inline}
   #orderBody .show-m{display:block}
   #orderBody td.acts{white-space:nowrap}
   #catalogList th,#catalogList td{padding:6px 4px}
@@ -270,6 +304,7 @@ button.danger-lite{color:var(--accent)}
   <button id="btnOrders" title="Збережені замовлення-наряди">📁 <span class="label">Збережені</span></button>
   <button id="btnClients" title="База клієнтів">👥 <span class="label">Клієнти</span></button>
   <button id="btnBookings" title="Запис клієнтів на сервіс">📅 <span class="label">Запис</span></button>
+  <button id="btnCash" title="Каса й боржники">💰 <span class="label">Каса</span></button>
   <button id="btnNew" title="Почати нове замовлення-наряд">＋ <span class="label">Нове</span></button>
   <button id="btnLogout" title="Вийти" hidden>⎋ <span class="label">Вийти</span></button>
 </header>
@@ -299,7 +334,7 @@ button.danger-lite{color:var(--accent)}
   <div class="dh"><h2>Довідник</h2><button id="closeCatalog">✕</button></div>
   <div class="db">
     <div class="seg" id="catTabs">
-      <button data-view="ops" class="on">Роботи</button><button data-view="parts">Запчастини</button><button data-view="settings">Налаштування</button>
+      <button data-view="ops" class="on">Роботи</button><button data-view="parts">Запчастини</button><button data-view="stock">Склад</button><button data-view="settings">Налаштування</button>
     </div>
     <div id="catalogList">Завантаження…</div>
   </div>
@@ -334,6 +369,14 @@ button.danger-lite{color:var(--accent)}
     <div class="bk-nav"><button data-bk-nav="-7" title="Попередній тиждень">◀</button><button data-bk-nav="0">Сьогодні</button><button data-bk-nav="7" title="Наступний тиждень">▶</button>
       <span id="bkRange" class="sub"></span><button data-bk-new class="bk-new">＋ Вручну</button></div>
     <div id="bkDays">Завантаження…</div>
+  </div>
+</dialog>
+
+<dialog id="cashDlg">
+  <div class="dh"><h2>Каса</h2><button id="closeCash">✕</button></div>
+  <div class="db">
+    <div class="seg" id="cashTabs"><button data-cash-view="cash" class="on">Каса за день</button><button data-cash-view="debts">Боржники</button></div>
+    <div id="cashBody">Завантаження…</div>
   </div>
 </dialog>
 
@@ -389,7 +432,7 @@ function remembered(){
   try{ return localStorage.getItem("lastOrder"); }catch(e){ return null; }
 }
 
-let ASSIGNEES = [];
+let ASSIGNEES = [], INTAKE_ITEMS = [];
 let currentOrder = null, TELEGRAM = false, BACKUP_CHAT = false, PHOTO_KINDS = ["до", "після", "пошкодження", "інше"];
 
 // ---------- Внутрішні коментарі (не друкуються) ----------
@@ -445,6 +488,140 @@ setInterval(async () => {
     }
   }catch(e){}
 }, 20000);
+
+// ---------- Акт приймання автомобіля ----------
+function renderIntake(o){
+  const box = $("#intakeBox");
+  if (!box) return;
+  const a = o.intake || {}, filled = (a.items && a.items.length) || a.left_inside || a.damages;
+  const n = encodeURIComponent(o.number);
+  box.innerHTML = `<div class="sec-head"><h3>📋 Акт приймання</h3>
+      <span>${a.signature ? `<span class="pay-st ok">✓ підписано</span>` : filled ? `<span class="pay-st">не підписано</span>` : ""}</span></div>
+    ${filled ? `<div class="sub">${a.items && a.items.length ? "Речі: " + a.items.map(esc).join(", ") + ". " : ""}${a.left_inside ? "У салоні: " + esc(a.left_inside) + ". " : ""}${a.damages ? "Пошкодження: " + esc(a.damages) : ""}</div>` : `<div class="sub">Ключі, речі в салоні, пошкодження, фото й підпис клієнта під час приймання.</div>`}
+    ${a.signature ? `<div class="intake-sig"><img alt="Підпис клієнта" src="/signatures/${encodeURIComponent(a.signature)}"><span class="sub">${esc(a.signed_by)} · ${esc(a.signed_at)}</span></div>` : ""}
+    <div class="intake-acts"><button data-intake-edit>✎ ${filled ? "Змінити" : "Заповнити"}</button>
+      <button data-intake-sign class="${filled && !a.signature ? "primary" : ""}">✍ ${a.signature ? "Підписати заново" : "Підпис клієнта"}</button>
+      <button data-intake-print>🖨 Акт</button></div>`;
+}
+
+function intakeDialog(){
+  if (!currentOrder) return;
+  const a = currentOrder.intake || {}, items = a.items || [];
+  const extra = items.filter(x => !INTAKE_ITEMS.includes(x));
+  $("#lineTitle").textContent = "Акт приймання автомобіля";
+  $("#lineBody").innerHTML = `<form class="form" id="intakeForm" autocomplete="off">
+      <label>Комплектність і речі</label><div class="checks intake-items">${INTAKE_ITEMS.map(x => `<label><input type="checkbox" value="${esc(x)}" ${items.includes(x) ? "checked" : ""}> ${esc(x)}</label>`).join("")}
+        <input id="iExtra" placeholder="Інше (через кому)" value="${esc(extra.join(", "))}"></div>
+      <label for="iLeft">Залишено в салоні / багажнику</label><textarea id="iLeft" maxlength="1000" placeholder="напр., сумка в багажнику, дитячі речі">${esc(a.left_inside || "")}</textarea>
+      <label for="iDmg">Пошкодження та зауваження</label><div><textarea id="iDmg" maxlength="1000" placeholder="напр., подряпина на задньому бампері зліва, скол на лобовому склі">${esc(a.damages || "")}</textarea>
+        <div class="hint">Фото пошкоджень додайте в блоці «📷 Фото» з типом «до» або «пошкодження» — вони потраплять в акт. Пробіг і заряд — у блоці «Замовник і автомобіль».</div></div>
+      <span></span><div>${a.signature ? `<div class="form-warn">Акт уже підписано. Після змін підпис буде знято — клієнт має підписати заново.</div>` : ""}
+        <div class="form-err" id="lineErr" hidden></div>
+        <div class="form-actions"><button class="primary" type="submit">Зберегти</button><button type="button" id="lineCancel">Скасувати</button></div></div>
+    </form>`;
+  $("#lineDlg").showModal();
+  $("#lineCancel").onclick = () => $("#lineDlg").close();
+  $("#intakeForm").onsubmit = async e => {
+    e.preventDefault();
+    const chosen = [...document.querySelectorAll(".intake-items input[type=checkbox]:checked")].map(x => x.value);
+    const more = $("#iExtra").value.split(",").map(x => x.trim()).filter(Boolean);
+    try{
+      const r = await api("/api/order/intake", {method: "PUT", body: JSON.stringify({items: [...chosen, ...more], left_inside: $("#iLeft").value, damages: $("#iDmg").value})});
+      $("#lineDlg").close();
+      renderOrder(r.order);
+      if (r.unsigned) alert("Зміст акта змінено — підпис знято. Попросіть клієнта підписати ще раз.");
+    }catch(err){ $("#lineErr").hidden = false; $("#lineErr").textContent = err.message; }
+  };
+}
+
+function signDialog(){
+  if (!currentOrder) return;
+  const o = currentOrder;
+  $("#lineTitle").textContent = "Підпис клієнта";
+  $("#lineBody").innerHTML = `<div class="sign-pad">
+      <p class="sub">${esc(o.vehicle.model ? "Tesla " + o.vehicle.model : "Автомобіль")}${o.vehicle.plate ? " · " + esc(o.vehicle.plate) : ""} · замовлення-наряд № ${esc(o.number)}</p>
+      <p>Із технічним станом автомобіля, переліком залишених речей і зауваженнями щодо пошкоджень ознайомлений(-а) і згоден(-на).</p>
+      <canvas id="sigCanvas" aria-label="Поле для підпису"></canvas>
+      <div class="sub">Підпишіться пальцем або мишею в полі вище.</div>
+      <div class="sign-row"><input id="sigName" placeholder="ПІБ клієнта" value="${esc(o.customer.name)}" aria-label="ПІБ клієнта">
+        <button type="button" id="sigClear">Очистити</button><button type="button" class="primary" id="sigSave">Зберегти підпис</button></div>
+      <div class="form-err" id="lineErr" hidden></div></div>`;
+  $("#lineDlg").showModal();
+  const canvas = $("#sigCanvas"), ratio = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * ratio; canvas.height = canvas.clientHeight * ratio;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(ratio, ratio); ctx.lineWidth = 2.4; ctx.lineCap = ctx.lineJoin = "round"; ctx.strokeStyle = "#111";
+  let drawing = false, strokes = 0, last = null;
+  const pos = e => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  canvas.onpointerdown = e => { drawing = true; last = pos(e); canvas.setPointerCapture(e.pointerId); strokes++;
+    ctx.beginPath(); ctx.arc(last[0], last[1], 1.1, 0, Math.PI * 2); ctx.fillStyle = "#111"; ctx.fill(); };
+  canvas.onpointermove = e => { if (!drawing) return; const p = pos(e);
+    ctx.beginPath(); ctx.moveTo(last[0], last[1]); ctx.lineTo(p[0], p[1]); ctx.stroke(); last = p; };
+  canvas.onpointerup = canvas.onpointercancel = () => { drawing = false; };
+  $("#sigClear").onclick = () => { ctx.clearRect(0, 0, canvas.width, canvas.height); strokes = 0; };
+  $("#sigSave").onclick = async () => {
+    const err = msg => { $("#lineErr").hidden = false; $("#lineErr").textContent = msg; };
+    if (!strokes) return err("Поле підпису порожнє");
+    if (!$("#sigName").value.trim()) return err("Вкажіть ПІБ того, хто підписує");
+    $("#sigSave").disabled = true;
+    try{
+      const r = await api("/api/order/intake/sign", {method: "POST", body: JSON.stringify({image: canvas.toDataURL("image/png"), signed_by: $("#sigName").value})});
+      $("#lineDlg").close();
+      renderOrder(r.order);
+    }catch(e){ err(e.message); $("#sigSave").disabled = false; }
+  };
+}
+document.addEventListener("click", e => {
+  const d = e.target.dataset;
+  if (!d || !currentOrder) return;
+  if (d.intakeEdit !== undefined && okToEdit()) intakeDialog();
+  if (d.intakeSign !== undefined){
+    const a = currentOrder.intake || {};
+    if (!((a.items && a.items.length) || a.left_inside || a.damages) && !confirm("Акт ще не заповнено. Підписати порожній акт?")) return;
+    signDialog();
+  }
+  if (d.intakePrint !== undefined) window.open(`/print/${encodeURIComponent(currentOrder.number)}/act`, "_blank");
+});
+
+// ---------- Оплата ----------
+const PAY_METHODS = ["готівка", "картка", "переказ"];
+const PAY_CLASS = {"оплачено": "ok", "частково": "part", "не оплачено": "", "переплата": "part"};
+function renderPayments(o){
+  const box = $("#payBox");
+  if (!box) return;
+  const bal = Number(o.balance), cur = esc(o.currency);
+  box.innerHTML = `<div class="sec-head"><h3>💵 Оплата</h3><span class="pay-st ${PAY_CLASS[o.payment_status] || ""}">${esc(o.payment_status)}</span></div>
+    ${o.payments.length ? `<div class="pay-list">${o.payments.map(p => `<div><span>${esc(p.at)}</span><span>${esc(p.method)}${p.by ? " · " + esc(p.by) : ""}${p.note ? " · " + esc(p.note) : ""}</span>
+      <b class="${Number(p.amount) < 0 ? "neg" : ""}">${Number(p.amount) < 0 ? "повернення " : ""}${num(Math.abs(Number(p.amount)))} ${cur}</b><button data-pay-del="${esc(p.id)}" title="Видалити запис про оплату">✕</button></div>`).join("")}</div>` : ""}
+    <div class="pay-sum"><span>Сплачено: <b>${num(o.paid)} ${cur}</b></span>
+      <span>${bal > 0 ? `До сплати: <b class="due">${num(bal)} ${cur}</b>` : bal < 0 ? `Переплата: <b>${num(-bal)} ${cur}</b>` : Number(o.totals.total) > 0 ? "✓ Сплачено повністю" : ""}</span></div>
+    <form class="pay-form" id="payForm">
+      <input id="payAmount" inputmode="decimal" aria-label="Сума" placeholder="Сума" value="${bal > 0 ? String(bal).replace(".", ",") : ""}">
+      <select id="payMethod" aria-label="Спосіб оплати">${PAY_METHODS.map(m => `<option>${m}</option>`).join("")}</select>
+      <input id="payNote" placeholder="Примітка (необов'язково)" aria-label="Примітка">
+      <button class="primary">Прийняти оплату</button>
+    </form>
+    <div class="hint">Передоплату теж вносьте тут. Повернення клієнту — сума з мінусом.</div>`;
+  $("#payForm").onsubmit = async e => {
+    e.preventDefault();
+    const amount = $("#payAmount").value.trim().replace(/\s/g, "").replace(",", ".");
+    if (!amount || !Number(amount)){ $("#payAmount").focus(); return; }
+    const sum = `${Number(amount) < 0 ? "Повернути клієнту" : "Прийняти"} ${num(Math.abs(Number(amount)))} ${o.currency} (${$("#payMethod").value})?`;
+    if (!confirm(sum)) return;
+    try{
+      const r = await api("/api/order/payments", {method: "POST", body: JSON.stringify({amount, method: $("#payMethod").value,
+                                                                                     note: $("#payNote").value, by: authorName()})});
+      renderOrder(r.order);
+    }catch(err){ alert(err.message); }
+  };
+}
+document.addEventListener("click", async e => {
+  const id = e.target.dataset && e.target.dataset.payDel;
+  if (!id || !currentOrder) return;
+  if (!confirm("Видалити запис про оплату? Робіть це лише для помилково внесеної оплати.")) return;
+  try{ renderOrder((await api(`/api/order/payments?payment_id=${encodeURIComponent(id)}`, {method: "DELETE"})).order); }
+  catch(err){ alert(err.message); }
+});
 
 // ---------- Погодження кошторису клієнтом ----------
 function renderApproval(a){
@@ -534,7 +711,7 @@ function renderOrder(o){
     const code = esc(isLabor ? l.code : l.part_no);
     return `<tr>
       <td class="hide-m">${i + 1}</td><td class="hide-m">${code}</td>
-      <td>${esc(l.name)}<div class="sub show-m">${code ? code + " · " : ""}${qty} × ${num(l.price)}${l.discount_percent ? " · −" + esc(l.discount_percent) + "%" : ""}</div></td>
+      <td>${esc(l.name)}<div class="sub show-m">${code ? code + " · " : ""}${qty} × ${num(l.price)}${l.discount_percent ? " · −" + esc(l.discount_percent) + "%" : ""}</div>${!isLabor && o.stock && l.part_no in o.stock ? `<div class="sub ${o.stock[l.part_no] < l.qty && o.status !== "видано" ? "stock-low" : ""}">на складі: ${String(o.stock[l.part_no]).replace(".", ",")}</div>` : ""}</td>
       <td class="r hide-m">${qty}</td>
       <td class="r hide-m">${num(l.price)}</td>
       <td class="r hide-m">${l.discount_percent ? esc(l.discount_percent) + "%" : ""}</td>
@@ -565,6 +742,7 @@ function renderOrder(o){
           <dt>Держ. номер</dt><dd>${dash(v.plate)}</dd><dt>Пробіг</dt><dd>${v.odometer_km != null ? Number(v.odometer_km).toLocaleString("uk-UA") + " км" : "—"}</dd>
           ${v.color ? `<dt>Колір</dt><dd>${esc(v.color)}</dd>` : ""}${v.battery_percent != null ? `<dt>Заряд ВВБ</dt><dd>${esc(v.battery_percent)}%</dd>` : ""}</dl>
     </div>
+    <div class="intake" id="intakeBox"></div>
     ${o.history && o.history.length ? `<h3>Історія автомобіля · ${o.history.length === 10 ? "останні 10 візитів" : "візитів: " + o.history.length}</h3>
       <div class="visits">${o.history.map(h => `<div class="visit">
         <div class="visit-head"><b>${esc(h.date.split(" ")[0])}</b><span class="sub">№ ${esc(h.number)} · ${esc(h.status)}${h.odometer_km != null ? " · " + Number(h.odometer_km).toLocaleString("uk-UA") + " км" : ""}</span>
@@ -589,6 +767,7 @@ function renderOrder(o){
       ${Number(o.vat_percent) ? `<div><span>${vat}</span><span>${num(t.vat)} ${cur}</span></div>` : ""}
       <div class="grand"><span>Разом</span><span>${num(t.total)} ${cur}</span></div>
     </div>
+    <div class="pay" id="payBox"></div>
     <h3>Рекомендації</h3>
     ${textList(o.recommendations, "recommendations")}
     <form class="inline-add" data-add-text="recommendations"><input placeholder="Додати рекомендацію…" aria-label="Нова рекомендація"><button>＋</button></form>
@@ -602,6 +781,8 @@ function renderOrder(o){
       currentOrder = r.order;
     }catch(err){ alert(err.message); e.target.value = o.assignee || ""; }
   };
+  renderPayments(o);
+  renderIntake(o);
   renderApproval(o.approval || null);
   renderPhotos(o.photos || []);
   renderComments(o.comments || []);
@@ -610,6 +791,10 @@ function renderOrder(o){
   $("#btnSend").onclick = () => sendToClientDialog(o);
   $("#statusSel").onchange = async e => {
     const status = e.target.value;
+    if (status === "видано" && Number(o.balance) > 0 &&
+        !confirm(`Клієнт ще не сплатив ${num(o.balance)} ${o.currency}. Видати автомобіль у борг?`)){
+      e.target.value = o.status; return;
+    }
     try{
       renderOrder((await api("/api/order/status", {method: "POST", body: JSON.stringify({status, by: authorName()})})).order);
     }catch(err){
@@ -725,7 +910,7 @@ async function showOrders(){
     $("#ordersList").innerHTML = list.length ? `<div class="tbl"><table>
       <tr><th>Номер</th><th>Дата</th><th>Клієнт</th><th>Автомобіль</th><th class="r">Сума</th><th>Статус</th><th class="r" title="Витрати на Claude">Claude</th><th></th></tr>
       ${list.map(o => `<tr><td>${esc(o.number)}${o.comments ? ` <span class="cc" title="Внутрішні коментарі">💬${o.comments}</span>` : ""}</td><td>${esc(o.created_at)}</td><td>${dash(o.customer)}</td><td>${dash(o.vehicle)}</td>
-        <td class="r">${num(o.total)} ${esc(o.currency)}</td><td><span class="badge ${stClass(o.status)}">${esc(o.status)}</span></td><td class="r sub">${o.ai_cost ? usd(o.ai_cost) : "—"}</td>
+        <td class="r">${num(o.total)} ${esc(o.currency)}${o.status === "видано" && Number(o.balance) > 0 ? `<div class="sub" style="color:var(--accent)">борг ${num(o.balance)}</div>` : o.payment_status === "оплачено" ? `<div class="sub" style="color:var(--ok)">оплачено</div>` : ""}</td><td><span class="badge ${stClass(o.status)}">${esc(o.status)}</span></td><td class="r sub">${o.ai_cost ? usd(o.ai_cost) : "—"}</td>
         <td class="r"><button data-open="${esc(o.number)}">Відкрити</button> <button data-print="${esc(o.number)}">🖨</button> <button data-del-order="${esc(o.number)}" title="Видалити">🗑</button></td></tr>`).join("")}
       </table></div>` : `<div class="empty">${q || ordersStatus ? "Нічого не знайдено." : "Збережених замовлень-нарядів поки немає."}</div>`;
   }catch(e){ $("#ordersList").textContent = e.message; }
@@ -1152,6 +1337,56 @@ $("#input").addEventListener("keydown", e => {
 $("#hints").addEventListener("click", e => { if (e.target.dataset.manual !== undefined) newManualOrder(); });
 $("#btnOrders").onclick = showOrders;
 
+// ---------- Каса й боржники ----------
+let cashView = "cash", cashDay = null;
+async function showCash(view){
+  cashView = view || cashView;
+  if (!$("#cashDlg").open){ $("#cashDlg").showModal(); cashDay = isoDate(new Date()); }
+  document.querySelectorAll("#cashTabs button").forEach(b => b.classList.toggle("on", b.dataset.cashView === cashView));
+  $("#cashBody").innerHTML = "Завантаження…";
+  try{
+    if (cashView === "cash"){
+      const c = await api(`/api/cash?day=${cashDay}`);
+      $("#cashBody").innerHTML = `<div class="bk-nav"><button data-cash-day="-1">◀</button>
+          <input type="date" id="cashDate" value="${esc(c.day)}"><button data-cash-day="1">▶</button>
+          <button data-cash-day="0">Сьогодні</button></div>
+        <div class="cash-tiles"><div><b>${num(c.total)} $</b>усього</div>${c.methods.map(m => `<div><b>${num(c.by_method[m])} $</b>${esc(m)}</div>`).join("")}</div>
+        ${c.payments.length ? `<div class="tbl"><table><tr><th>Час</th><th>Замовлення</th><th class="hide-m">Клієнт</th><th>Спосіб</th><th class="r">Сума</th></tr>
+          ${c.payments.map(p => `<tr><td>${esc(p.at.slice(11))}</td><td><button data-cash-open="${esc(p.number)}">${esc(p.number)}</button><div class="sub show-m">${esc(p.client)}</div></td>
+            <td class="hide-m">${dash(p.client)}<div class="sub">${esc(p.vehicle)}${p.by ? " · прийняв(-ла) " + esc(p.by) : ""}${p.note ? " · " + esc(p.note) : ""}</div></td>
+            <td>${esc(p.method)}</td><td class="r">${num(p.amount)} $</td></tr>`).join("")}</table></div>`
+          : `<div class="empty">Оплат за цей день немає.</div>`}`;
+      $("#cashDate").onchange = e => { if (e.target.value){ cashDay = e.target.value; showCash(); } };
+    }else{
+      const d = await api("/api/debts");
+      const row = x => `<tr><td><button data-cash-open="${esc(x.number)}">${esc(x.number)}</button><div class="sub">${dateOnly(x.created_at)}</div></td>
+        <td>${dash(x.client)}<div class="sub">${esc(x.phone)}${x.vehicle ? " · " + esc(x.vehicle) : ""}</div></td>
+        <td class="r hide-m">${num(x.total)} $</td><td class="r hide-m">${num(x.paid)} $</td><td class="r"><b>${num(Math.abs(Number(x.balance)))} $</b></td></tr>`;
+      $("#cashBody").innerHTML = `
+        <div class="cash-tiles"><div><b>${num(d.total)} $</b>борги клієнтів</div><div><b>${d.debts.length}</b>замовлень у борг</div></div>
+        ${d.debts.length ? `<div class="tbl"><table><tr><th>Замовлення</th><th>Клієнт</th><th class="r hide-m">Сума</th><th class="r hide-m">Сплачено</th><th class="r">Борг</th></tr>${d.debts.map(row).join("")}</table></div>`
+          : `<div class="empty">Боргів немає — усі видані автомобілі оплачено.</div>`}
+        ${d.overpaid.length ? `<h3>Переплата / треба повернути</h3><div class="tbl"><table><tr><th>Замовлення</th><th>Клієнт</th><th class="r hide-m">Сума</th><th class="r hide-m">Сплачено</th><th class="r">Повернути</th></tr>${d.overpaid.map(row).join("")}</table></div>` : ""}`;
+    }
+  }catch(e){ $("#cashBody").textContent = e.message; }
+}
+$("#btnCash").onclick = () => showCash();
+$("#closeCash").onclick = () => $("#cashDlg").close();
+$("#cashTabs").onclick = e => { if (e.target.dataset.cashView) showCash(e.target.dataset.cashView); };
+$("#cashBody").addEventListener("click", async e => {
+  const d = e.target.dataset;
+  if (d.cashDay !== undefined){ cashDay = d.cashDay === "0" ? isoDate(new Date()) : addDays(cashDay, Number(d.cashDay)); return showCash(); }
+  if (d.cashOpen){
+    try{
+      const data = await api(`/api/orders/${encodeURIComponent(d.cashOpen)}/open`, {method: "POST"});
+      $("#cashDlg").close(); $("#log").innerHTML = "";
+      addMsg("assistant", `Відкрито замовлення-наряд № ${d.cashOpen}.`);
+      renderOrder(data.order);
+      document.querySelector('.tabs button[data-tab="order"]').click();
+    }catch(err){ alert(err.message); }
+  }
+});
+
 // ---------- Запис на сервіс (планувальник) ----------
 let bkStart = null;
 const isoDate = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -1324,7 +1559,7 @@ function renderClientsTable(){
     <tr><th>Клієнт</th><th class="hide-m">Автомобілі</th><th class="r">Візитів</th><th class="r hide-m">Сума</th><th class="hide-m">Останній візит</th></tr>
     ${list.map(c => `<tr class="click" data-client="${esc(c.key)}"><td>${dash(c.name)} ${tgBadge(c)}<div class="sub">${dash(c.phone)}<span class="show-m"> · ${c.cars.map(x => esc(x.model || "Tesla")).join(", ")} · ${dateOnly(c.last_visit)}</span></div></td>
       <td class="hide-m">${c.cars.map(x => `Tesla ${esc(x.model || "")} ${x.plate ? `<span class="sub">${esc(x.plate)}</span>` : ""}`).join("<br>") || "—"}</td>
-      <td class="r">${c.visits}</td><td class="r hide-m">${num(c.spent)} $</td><td class="hide-m">${dateOnly(c.last_visit)}</td></tr>`).join("")}
+      <td class="r">${c.visits}</td><td class="r hide-m">${num(c.spent)} $${Number(c.debt) > 0 ? `<div class="sub" style="color:var(--accent)">борг ${num(c.debt)}</div>` : ""}</td><td class="hide-m">${dateOnly(c.last_visit)}</td></tr>`).join("")}
     </table></div>` : `<div class="empty">${clientsData.clients.length ? "Нічого не знайдено." : "Клієнти з'являться тут із першими замовленнями-нарядами."}</div>`;
 }
 
@@ -1337,6 +1572,7 @@ function showClientCard(key){
     <div class="info"><dl><dt>Телефон</dt><dd>${dash(c.phone)}</dd><dt>E-mail</dt><dd>${dash(c.email)}</dd>
       ${c.telegram ? `<dt>Telegram</dt><dd>${esc(c.telegram.name)}${c.telegram.at ? ` · з ${dateOnly(c.telegram.at)}` : ""}${c.telegram.blocked ? " · заблокував бота" : ""}</dd>` : ""}</dl></div>
     <div class="client-stats"><div><b>${c.visits}</b>візитів</div><div><b>${num(c.spent)} $</b>усього</div>
+      ${Number(c.debt) > 0 ? `<div style="color:var(--accent)"><b>${num(c.debt)} $</b>борг</div>` : ""}
       <div><b>${dateOnly(c.first_visit)}</b>перший візит</div><div><b>${dateOnly(c.last_visit)}</b>останній візит</div></div>
     <div class="sec-head"><h3>Автомобілі</h3><button class="primary" data-client-order="">＋ Нове замовлення</button></div>
     <div class="cars">${c.cars.map(x => `<div class="car"><b>Tesla ${esc(x.model || "")} ${x.year ? esc(x.year) : ""}</b>
@@ -1464,9 +1700,82 @@ function showCatalog(view){
         <button class="primary" data-new-part>＋ Нова запчастина</button></div><div id="partsTable"></div>`;
     $("#partQuery").oninput = e => { partQuery = e.target.value; renderPartsTable(); };
     renderPartsTable();
+  } else if (catView === "stock"){
+    loadStock(flash);
   } else {
     renderSettingsForm(flash);
   }
+}
+
+// ---------- Склад ----------
+let stockData = null, stockQuery = "", stockLowOnly = false;
+async function loadStock(flash = ""){
+  $("#catalogList").innerHTML = `${flash}<div class="toolbar">
+      <input id="stockQuery" type="search" placeholder="Пошук запчастини або артикулу" value="${esc(stockQuery)}">
+      <button data-download="/api/stock/to-order.xlsx">⬇ Що замовити (Excel)</button></div>
+    <div class="filter-chips"><button data-stock-filter="0" class="${stockLowOnly ? "" : "on"}">усі</button><button data-stock-filter="1" class="${stockLowOnly ? "on" : ""}">⚠ треба замовити</button></div>
+    <div class="sub" style="margin:6px 0">Запчастини з довідника списуються автоматично, коли замовлення-наряд отримує статус «видано».
+      «Резерв» — уже вписані в замовлення, які ще не видано. Мінімум 0 — без нагадувань.</div>
+    <div id="stockTable">Завантаження…</div>`;
+  $("#stockQuery").oninput = e => { stockQuery = e.target.value; renderStockTable(); };
+  try{ stockData = await api("/api/stock"); renderStockTable(); }
+  catch(e){ $("#stockTable").textContent = e.message; }
+}
+function renderStockTable(){
+  if (!stockData || !$("#stockTable")) return;
+  const q = stockQuery.trim().toLowerCase();
+  const items = stockData.items.filter(i => (!stockLowOnly || i.low || i.free < 0) && (!q || `${i.part_no} ${i.name}`.toLowerCase().includes(q)));
+  const n = v => String(v).replace(".", ",");
+  $("#stockTable").innerHTML = items.length ? `<div class="tbl"><table>
+    <tr><th>Запчастина</th><th class="r">Залишок</th><th class="r hide-m">Резерв</th><th class="r hide-m">Мін.</th><th></th></tr>
+    ${items.map(i => `<tr><td>${esc(i.name)}<div class="sub">${esc(i.part_no)}${i.reserved ? `<span class="show-m"> · резерв ${n(i.reserved)}</span>` : ""}</div></td>
+      <td class="r"><b class="${i.low || i.free < 0 ? "stock-low" : ""}">${n(i.qty)}</b> ${esc(i.unit)}${i.free < 0 ? `<div class="sub stock-low">бракує ${n(-i.free)}</div>` : i.low ? `<div class="sub stock-low">замовити</div>` : ""}</td>
+      <td class="r hide-m">${i.reserved ? n(i.reserved) : "—"}</td><td class="r hide-m">${i.min ? n(i.min) : "—"}</td>
+      <td class="r acts"><button data-stock-in="${esc(i.part_no)}" title="Прихід">＋</button> <button data-stock-adj="${esc(i.part_no)}" title="Інвентаризація, мінімум, історія">⚖</button></td></tr>`).join("")}
+    </table></div>` : `<div class="empty">${stockLowOnly ? "Усього вистачає — замовляти нічого." : "Нічого не знайдено."}</div>`;
+}
+async function stockDialog(partNo, mode){
+  const i = stockData.items.find(x => x.part_no === partNo);
+  if (!i) return;
+  $("#lineTitle").textContent = `${mode === "in" ? "Прихід" : "Склад"}: ${i.name}`;
+  $("#lineBody").innerHTML = `<form class="form" id="stockForm" autocomplete="off">
+      <label>Залишок</label><div><b>${String(i.qty).replace(".", ",")} ${esc(i.unit)}</b>${i.reserved ? ` · у резерві ${String(i.reserved).replace(".", ",")}` : ""}</div>
+      ${mode === "in" ? `<label for="sQty">Надійшло, ${esc(i.unit)}</label><input id="sQty" inputmode="decimal" required>
+        <label for="sNote">Постачальник / примітка</label><input id="sNote" placeholder="напр., накладна № 123">`
+      : `<label for="sQty">Фактично на складі</label><div><input id="sQty" inputmode="decimal" value="${String(i.qty).replace(".", ",")}">
+          <div class="hint">Після перерахунку: різниця запишеться як «інвентаризація».</div></div>
+        <label for="sMin">Мінімальний залишок</label><div><input id="sMin" inputmode="decimal" value="${String(i.min).replace(".", ",")}">
+          <div class="hint">Коли залишиться стільки чи менше — бот напише в групу «закінчується».</div></div>
+        <label for="sNote">Примітка</label><input id="sNote">`}
+      <span></span><div><div class="form-err" id="lineErr" hidden></div>
+        <div class="form-actions"><button class="primary" type="submit">Зберегти</button><button type="button" id="lineCancel">Скасувати</button></div></div>
+    </form>
+    ${mode === "in" ? "" : `<h3>Рух за останній час</h3><div id="stockMoves" class="sub">Завантаження…</div>`}`;
+  $("#lineDlg").showModal();
+  $("#lineCancel").onclick = () => $("#lineDlg").close();
+  $("#sQty").focus();
+  if (mode !== "in"){
+    api(`/api/stock/${encodeURIComponent(partNo)}/moves`).then(rows => {
+      $("#stockMoves").innerHTML = rows.length ? `<div class="tbl"><table><tr><th>Дата</th><th>Операція</th><th class="r">К-сть</th><th class="r">Залишок</th></tr>
+        ${rows.slice(0, 50).map(r => `<tr><td>${esc(r.at)}</td><td>${esc(r.kind)}${r.order ? " · " + esc(r.order) : ""}${r.by ? " · " + esc(r.by) : ""}${r.note ? `<div class="sub">${esc(r.note)}</div>` : ""}</td>
+          <td class="r">${r.qty > 0 ? "+" : ""}${String(r.qty).replace(".", ",")}</td><td class="r">${String(r.after).replace(".", ",")}</td></tr>`).join("")}</table></div>` : "Руху ще не було.";
+    }).catch(e => { $("#stockMoves").textContent = e.message; });
+  }
+  $("#stockForm").onsubmit = async e => {
+    e.preventDefault();
+    const body = {qty: $("#sQty").value, note: $("#sNote").value, by: authorName()};
+    const url = `/api/stock/${encodeURIComponent(partNo)}`;
+    try{
+      if (mode === "in") await api(url + "/receive", {method: "POST", body: JSON.stringify(body)});
+      else{
+        if (String($("#sMin").value).replace(",", ".") !== String(i.min)) await api(url + "/min", {method: "PUT", body: JSON.stringify({qty: $("#sMin").value})});
+        if (String(body.qty).replace(",", ".") !== String(i.qty)) await api(url + "/adjust", {method: "POST", body: JSON.stringify(body)});
+      }
+      $("#lineDlg").close();
+      catFlash = mode === "in" ? `Прихід записано: ${i.name}` : `Збережено: ${i.name}`;
+      showCatalog("stock");
+    }catch(err){ $("#lineErr").hidden = false; $("#lineErr").textContent = err.message; }
+  };
 }
 
 function renderOpsTable(){
@@ -1714,6 +2023,9 @@ $("#catalogList").addEventListener("click", e => {
   if (d.editOp) return opForm(d.editOp);
   if (d.newPart !== undefined) return partForm(null);
   if (d.editPart) return partForm(d.editPart);
+  if (d.stockFilter !== undefined){ stockLowOnly = d.stockFilter === "1"; document.querySelectorAll("[data-stock-filter]").forEach(b => b.classList.toggle("on", b === e.target)); return renderStockTable(); }
+  if (d.stockIn) return stockDialog(d.stockIn, "in");
+  if (d.stockAdj) return stockDialog(d.stockAdj, "adj");
   if (!d.add) return;
   const op = catalogData.operations.find(o => o.code === d.add);
   $("#catalogDlg").close();
@@ -1739,6 +2051,7 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
     TELEGRAM = !!s.telegram;
     BACKUP_CHAT = !!s.backup_chat;
     ASSIGNEES = s.assignees || [];
+    INTAKE_ITEMS = s.intake_items || [];
     if (s.photo_kinds) PHOTO_KINDS = s.photo_kinds;
     if (s.service) SERVICE_ADDRESS = s.service.address || "";
     if (s.service && s.service.name){ $("#brand").textContent = s.service.name; document.title = s.service.name; }

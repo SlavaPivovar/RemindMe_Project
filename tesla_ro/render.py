@@ -45,6 +45,13 @@ def render_html(order: RepairOrder, service: dict | None = None) -> str:
             contacts,
         ) if x
     )
+    paid_rows = ""
+    if order.payments:
+        balance = order.balance()
+        paid_rows = (f'<tr><td>Сплачено:</td><td class=r>{fmt(order.paid())} {cur}</td></tr>'
+                     + (f'<tr><td><b>Залишок до сплати:</b></td><td class=r><b>{fmt(balance)} {cur}</b></td></tr>'
+                        if balance > 0 else '<tr><td colspan=2 class=r><b>Сплачено повністю</b></td></tr>'
+                        if balance == 0 else f'<tr><td>Переплата:</td><td class=r>{fmt(-balance)} {cur}</td></tr>'))
     vat_label = (
         f"у т.ч. ПДВ {_num(order.vat_percent)}%" if order.prices_include_vat else f"ПДВ {_num(order.vat_percent)}%"
     )
@@ -92,7 +99,7 @@ th{{background:#eee;text-align:left}} .r{{text-align:right;white-space:nowrap}}
 <tr><td>Разом запчастини:</td><td class=r>{fmt(t["parts"])} {cur}</td></tr>
 {f'<tr><td>{vat_label}:</td><td class=r>{fmt(t["vat"])} {cur}</td></tr>' if order.vat_percent else ""}
 <tr><td><b>УСЬОГО ДО СПЛАТИ:</b></td><td class=r><b>{fmt(t["total"])} {cur}</b></td></tr>
-</table>
+{paid_rows}</table>
 {f"<h2>Рекомендації</h2><ul>{recs}</ul>" if recs else ""}
 
 <p style="margin-top:16px;font-size:11px;color:#444">З обсягом і вартістю робіт ознайомлений і згоден.
