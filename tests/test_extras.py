@@ -107,12 +107,16 @@ def test_estimate_approval(tmp_path, session):
     fake, web, bot = make(tmp_path, session)
     bot.order_saved(session.store.load(number))
     bot.flush()
-    assert web.post(f"/api/orders/{number}/send-approval").status_code == 409  # клієнт ще не підключився
+    # клієнт ще не в боті — погодження все одно створюється, клієнту — посилання на сторінку
+    first = web.post(f"/api/orders/{number}/send-approval").json()
+    assert first["telegram"] is None and "/c/" in first["link"] and not fake.sent("sendDocument")
     connect_client(web, bot, number)
-    approval = web.post(f"/api/orders/{number}/send-approval").json()["approval"]
-    assert approval["status"] == "pending" and approval["total"] == "222.00"
+    r = web.post(f"/api/orders/{number}/send-approval", headers={"x-forwarded-proto": "https", "host": "sto.example"}).json()
+    approval = r["approval"]
+    assert r["telegram"] is True and r["link"].startswith("https://sto.example/c/")
+    assert approval["status"] == "pending" and approval["total"] == "222.00" and len(approval["lines"]) == 2
     doc = fake.sent("sendDocument")[-1]["multipart"].decode("utf-8", "replace")
-    assert "ap:" in doc and "inline_keyboard" in doc
+    assert "ap:" in doc and "inline_keyboard" in doc and "https://sto.example/c/" in doc  # кнопка «Обрати по пунктах»
 
     bot.handle_update(callback(number, "y", chat_id=999, message_id=approval["message_id"]))  # чужий чат
     assert bot.approval(number)["status"] == "pending"

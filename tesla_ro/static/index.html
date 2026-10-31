@@ -245,6 +245,11 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .uah-opts{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px}
 .uah-opts label{display:flex;align-items:center;gap:6px;padding:0;color:var(--muted);font-size:13px}
 .uah-opts input{width:90px !important}
+.dec{font-size:11px;white-space:nowrap;color:var(--warn)}
+.dec.ok{color:var(--ok)}
+.defer-btn{display:block;margin-top:6px;font-size:13px}
+.link-row{display:flex;gap:6px;margin-top:6px}
+.link-row input{flex:1;min-width:0;font:inherit;font-size:13px;padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
 .tg{font-size:12px;white-space:nowrap;color:var(--ok)}
 .tg.off{color:var(--muted)}
 tr.click{cursor:pointer}
@@ -816,20 +821,44 @@ document.addEventListener("click", async e => {
 });
 
 // ---------- Погодження кошторису клієнтом ----------
+function lineDecision(o, kind, i, name){
+  const a = o.approval;
+  const x = a && a.lines && a.lines.find(y => y.key === `${kind}:${i}` && y.name === name);
+  if (!x || x.decision === "pending") return "";
+  return x.decision === "approved" ? ` <span class="dec ok" title="Клієнт погодив">✅</span>` : ` <span class="dec" title="Клієнт відклав на потім">⏳ пізніше</span>`;
+}
+
 function renderApproval(a){
   if (!currentOrder || !$("#approvalBox")) return;
   currentOrder.approval = a;
   const box = $("#approvalBox"), o = currentOrder;
   if (!a){ box.hidden = true; return; }
   box.hidden = false;
-  const sum = `${num(a.total)} ${esc(a.currency || o.currency)}`;
-  const changed = a.status !== "declined" && Math.abs(Number(a.total) - Number(o.totals.total)) > 0.004;
-  const text = a.status === "approved" ? `✅ Клієнт погодив кошторис на ${sum} · ${esc(a.at)}`
-    : a.status === "declined" ? `❌ Клієнт відмовився від кошторису на ${sum} · ${esc(a.at)}`
+  const cur = esc(a.currency || o.currency), sum = `${num(a.total)} ${cur}`;
+  const later = (a.lines || []).filter(x => x.decision === "deferred");
+  const yes = (a.lines || []).filter(x => x.decision === "approved");
+  const via = a.via === "web" ? " · на сторінці" : a.via === "telegram" ? " · у Telegram" : "";
+  const changed = a.status === "pending" || a.status === "approved"
+    ? Math.abs(Number(a.total) - Number(o.totals.total)) > 0.004 : false;
+  const text = a.status === "approved" ? `✅ Клієнт погодив кошторис на ${sum} · ${esc(a.at)}${via}`
+    : a.status === "partial" ? `🟡 Клієнт погодив ${yes.length} з ${a.lines.length} на ${num(a.approved_total)} ${cur}, відклав ${later.length} на ${num(a.deferred_total)} ${cur} · ${esc(a.at)}${via}`
+    : a.status === "declined" ? `❌ Клієнт відмовився від кошторису на ${sum} · ${esc(a.at)}${via}`
     : `⏳ Кошторис на ${sum} надіслано на погодження ${esc(a.sent_at)} — чекаємо відповіді клієнта`;
-  box.className = "approval " + (a.status === "approved" ? "ok" : a.status === "declined" ? "no" : "");
-  box.innerHTML = text + (changed ? `<span class="warn">⚠ Відтоді сума змінилась: зараз ${num(o.totals.total)} ${esc(o.currency)}. Надішліть кошторис на погодження ще раз (📤 Клієнту).</span>` : "");
+  const stillThere = later.some(x => { const [k, i] = x.key.split(":"); const row = (k === "labor" ? o.labor : o.parts)[Number(i)]; return row && row.name === x.name; });
+  box.className = "approval " + (a.status === "approved" || a.status === "partial" ? "ok" : a.status === "declined" ? "no" : "");
+  box.innerHTML = text
+    + (later.length ? `<div class="sub">Відкладено: ${later.map(x => `${esc(x.name)} (${num(x.total)})`).join(", ")}</div>` : "")
+    + (stillThere ? `<button class="defer-btn" data-defer>⏳ Прибрати відкладене із замовлення → у рекомендації</button>` : "")
+    + (changed ? `<span class="warn">⚠ Відтоді сума змінилась: зараз ${num(o.totals.total)} ${esc(o.currency)}. Надішліть кошторис на погодження ще раз (📤 Клієнту).</span>` : "");
 }
+
+document.addEventListener("click", async e => {
+  if (e.target.dataset && e.target.dataset.defer !== undefined && currentOrder){
+    if (!confirm("Прибрати відкладені клієнтом роботи із замовлення й записати їх у рекомендації?")) return;
+    try{ renderOrder((await api("/api/order/approval/defer", {method: "POST"})).order); }
+    catch(err){ alert(err.message); }
+  }
+});
 
 // ---------- Фото до замовлення ----------
 function renderPhotos(list){
@@ -840,11 +869,14 @@ function renderPhotos(list){
   const n = encodeURIComponent(currentOrder.number);
   const kind = box.dataset.kind || "до";
   const toClient = list.filter(p => p.to_client).length;
+  const lineNames = [...new Set([...currentOrder.labor, ...currentOrder.parts].map(x => x.name))];
   box.innerHTML = `<h3>📷 Фото${list.length ? " · " + list.length : ""}</h3>
     <div class="sub desc-m" style="margin:-4px 0 10px">До й після ремонту, пошкодження. Позначені «клієнту» бот надсилає разом із PDF${toClient ? ` (зараз: ${toClient})` : ""}.${TELEGRAM ? " Фото відповіддю на картку в Telegram-групі теж потрапляють сюди." : ""}</div>
     ${list.length ? `<div class="photos">${list.map(p => `<div class="photo">
         <a href="/photos/${n}/${esc(p.id)}" target="_blank" rel="noopener" title="${esc(p.author)} · ${esc(p.at)}"><img loading="lazy" alt="Фото: ${esc(p.kind)}" src="/photos/${n}/${esc(p.id)}"></a>
         <div class="pc"><select data-photo-kind="${esc(p.id)}" aria-label="Тип фото">${PHOTO_KINDS.map(k => `<option ${k === p.kind ? "selected" : ""}>${esc(k)}</option>`).join("")}</select>
+          ${lineNames.length ? `<select data-photo-line="${esc(p.id)}" aria-label="До пункту кошторису" title="До якого пункту кошторису — клієнт побачить фото поруч із ним">
+            <option value="">до пункту: —</option>${lineNames.map(nm => `<option ${nm === p.line ? "selected" : ""}>${esc(nm)}</option>`).join("")}</select>` : ""}
           <label><input type="checkbox" data-photo-client="${esc(p.id)}" ${p.to_client ? "checked" : ""}> клієнту</label>
           <button data-photo-del="${esc(p.id)}" title="Видалити фото">✕</button></div>
       </div>`).join("")}</div>` : ""}
@@ -871,9 +903,9 @@ function renderPhotos(list){
 }
 document.addEventListener("change", async e => {
   const d = e.target.dataset;
-  if (!currentOrder || (!d.photoKind && !d.photoClient)) return;
-  const id = d.photoKind || d.photoClient;
-  const body = d.photoKind ? {kind: e.target.value} : {to_client: e.target.checked};
+  if (!currentOrder || (!d.photoKind && !d.photoClient && !d.photoLine)) return;
+  const id = d.photoKind || d.photoClient || d.photoLine;
+  const body = d.photoKind ? {kind: e.target.value} : d.photoLine ? {line: e.target.value} : {to_client: e.target.checked};
   try{ renderPhotos(await api(`/api/orders/${encodeURIComponent(currentOrder.number)}/photos/${id}`, {method: "PATCH", body: JSON.stringify(body)})); }
   catch(err){ alert(err.message); }
 });
@@ -904,7 +936,7 @@ function renderOrder(o){
     const code = esc(isLabor ? l.code : l.part_no);
     return `<tr>
       <td class="hide-m">${i + 1}</td><td class="hide-m">${code}</td>
-      <td>${esc(l.name)}<div class="sub show-m">${code ? code + " · " : ""}${qty} × ${num(l.price)}${l.discount_percent ? " · −" + esc(l.discount_percent) + "%" : ""}</div>${!isLabor && o.stock && l.part_no in o.stock ? `<div class="sub ${o.stock[l.part_no] < l.qty && o.status !== "видано" ? "stock-low" : ""}">на складі: ${String(o.stock[l.part_no]).replace(".", ",")}</div>` : ""}</td>
+      <td>${esc(l.name)}${lineDecision(o, isLabor ? "labor" : "parts", i, l.name)}<div class="sub show-m">${code ? code + " · " : ""}${qty} × ${num(l.price)}${l.discount_percent ? " · −" + esc(l.discount_percent) + "%" : ""}</div>${!isLabor && o.stock && l.part_no in o.stock ? `<div class="sub ${o.stock[l.part_no] < l.qty && o.status !== "видано" ? "stock-low" : ""}">на складі: ${String(o.stock[l.part_no]).replace(".", ",")}</div>` : ""}</td>
       <td class="r hide-m">${qty}</td>
       <td class="r hide-m">${num(l.price)}</td>
       <td class="r hide-m">${l.discount_percent ? esc(l.discount_percent) + "%" : ""}</td>
@@ -1186,6 +1218,11 @@ async function sendToClientDialog(o){
   clearInterval(clientPoll);
   $("#lineTitle").textContent = `Надіслати клієнту · № ${o.number}`;
   $("#lineBody").innerHTML = `
+    <div class="send-sec"><h3>📝 Погодження й сторінка для клієнта</h3>
+      <div class="sub">Клієнт відкриває посилання з будь-якого телефона (Telegram, Viber, SMS) і бачить статус ремонту, кошторис, фото, оплату й документи.
+        На погодженні він позначає кожен пункт: «✅ погоджую» або «⏳ пізніше».${TELEGRAM ? " Якщо клієнт підключений до бота — кошторис прийде йому й у Telegram." : ""}</div>
+      <div class="send-row"><button class="primary" id="sendApproval">📝 Надіслати на погодження</button><button id="pageLink">🔗 Посилання на сторінку</button></div>
+      <div id="pageBox"></div></div>
     <div class="send-sec"><h3>PDF через «Поділитися»</h3>
       <div class="sub">Відкриється меню телефона: виберіть Telegram (чи Viber) і чат клієнта.</div>
       <div class="send-row"><button class="primary" id="sharePdf" disabled>📤 Поділитися PDF</button>
@@ -1195,6 +1232,27 @@ async function sendToClientDialog(o){
     <div class="form-err" id="lineErr" hidden></div>`;
   $("#lineDlg").showModal();
   $("#lineDlg").addEventListener("close", () => clearInterval(clientPoll), {once: true});
+  const showLink = (link, note) => {
+    $("#pageBox").innerHTML = `<div class="ok-line">${note}</div><div class="link-row"><input readonly value="${esc(link)}" aria-label="Посилання">
+      <button id="copyPage">Копіювати</button>${navigator.share ? `<button id="sharePage">Поділитися</button>` : ""}</div>`;
+    $("#copyPage").onclick = async () => { try{ await navigator.clipboard.writeText(link); $("#copyPage").textContent = "✓ Скопійовано"; }catch(e){ prompt("Скопіюйте посилання:", link); } };
+    if ($("#sharePage")) $("#sharePage").onclick = () => navigator.share({text: `Замовлення-наряд № ${o.number}: ${link}`}).catch(() => {});
+  };
+  $("#pageLink").onclick = async () => {
+    try{ showLink((await api(`/api/orders/${encodeURIComponent(o.number)}/share`, {method: "POST"})).link, "Посилання на сторінку замовлення:"); }
+    catch(e){ $("#pageBox").innerHTML = `<div class="form-err">${esc(e.message)}</div>`; }
+  };
+  $("#sendApproval").onclick = async () => {
+    if (o.approval && o.approval.status === "pending" && !confirm("Кошторис уже чекає відповіді клієнта. Надіслати оновлений?")) return;
+    $("#sendApproval").disabled = true;
+    try{
+      const r = await api(`/api/orders/${encodeURIComponent(o.number)}/send-approval`, {method: "POST"});
+      showLink(r.link, r.telegram === true ? "✓ Надіслано клієнту в Telegram. Посилання також можна надіслати у Viber чи SMS:"
+        : (typeof r.telegram === "string" ? `⚠ ${esc(r.telegram)}. ` : "") + "✓ Погодження створено — надішліть клієнту це посилання:");
+      if (currentOrder && currentOrder.number === o.number) renderApproval(r.approval);
+    }catch(e){ $("#pageBox").innerHTML = `<div class="form-err">${esc(e.message)}</div>`; }
+    $("#sendApproval").disabled = false;
+  };
 
   // PDF готуємо заздалегідь: iPhone дозволяє «Поділитися» лише одразу після натискання кнопки.
   let file = null;
@@ -1227,23 +1285,13 @@ async function loadBotBox(o, sentNow){
     $("#botBox").innerHTML = `${sentNow ? `<div class="ok-line">✓ Клієнт підключився — бот уже надіслав йому PDF.</div>` : ""}
       <div>Клієнт <b>${esc(d.client)}</b> підключений до бота.</div>
       <div class="send-row"><button class="primary" id="sendBot">Надіслати PDF через бота</button><span id="sendBotRes"></span></div>
-      <div class="send-row"><button id="sendApproval">📝 Надіслати на погодження</button><span id="approvalRes"></span></div>
-      <div class="sub">На погодження: клієнт отримає кошторис із кнопками «✅ Погоджую / ❌ Відмовляюсь», відповідь з'явиться в замовленні.
-        ${(o.photos || []).some(p => p.to_client) ? "Фото, позначені «клієнту», надсилаються разом із PDF." : ""}</div>`;
+      ${(o.photos || []).some(p => p.to_client) ? `<div class="sub">Фото, позначені «клієнту», надсилаються разом із PDF.</div>` : ""}`;
     $("#sendBot").onclick = async () => {
       $("#sendBot").disabled = true;
       try{
         const r = await api(`/api/orders/${encodeURIComponent(o.number)}/send-telegram`, {method: "POST"});
         $("#sendBotRes").innerHTML = `<span class="ok-line">✓ Надіслано: ${esc(r.client)}${r.photos ? ` (+ фото: ${r.photos})` : ""}</span>`;
       }catch(e){ $("#sendBotRes").textContent = e.message; $("#sendBot").disabled = false; }
-    };
-    $("#sendApproval").onclick = async () => {
-      $("#sendApproval").disabled = true;
-      try{
-        const r = await api(`/api/orders/${encodeURIComponent(o.number)}/send-approval`, {method: "POST"});
-        $("#approvalRes").innerHTML = `<span class="ok-line">✓ Надіслано на погодження</span>`;
-        if (currentOrder && currentOrder.number === o.number) renderApproval(r.approval);
-      }catch(e){ $("#approvalRes").textContent = e.message; $("#sendApproval").disabled = false; }
     };
     return;
   }

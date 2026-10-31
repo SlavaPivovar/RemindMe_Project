@@ -72,7 +72,8 @@ class PhotoStore:
             self._write(number, items)
         return item
 
-    def update(self, number: str, photo_id: str, kind: str | None = None, to_client: bool | None = None) -> dict:
+    def update(self, number: str, photo_id: str, kind: str | None = None, to_client: bool | None = None,
+               line: str | None = None) -> dict:
         with self._lock:
             items = self._read(number)
             item = next((x for x in items if x["id"] == photo_id), None)
@@ -84,6 +85,8 @@ class PhotoStore:
                 item["kind"] = kind
             if to_client is not None:
                 item["to_client"] = bool(to_client)
+            if line is not None:
+                item["line"] = line.strip()[:200]  # «» — не прив'язано до рядка
             self._write(number, items)
         return item
 

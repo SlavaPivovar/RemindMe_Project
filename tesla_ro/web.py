@@ -30,6 +30,9 @@ from fastapi import Cookie, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
+from .approvals import ApprovalError, ApprovalStore
+from .approvals import summary as approval_summary
+from .client_page import render_client_page
 from .acts import INTAKE_ITEMS, ActError, Signatures, render_act_html, render_act_pdf, update_intake
 from .assistant import MODEL, RepairOrderAssistant
 from . import bookings as bk
@@ -117,6 +120,10 @@ class StockIn(BaseModel):
     by: str = ""
 
 
+class ClientApproveIn(BaseModel):
+    decisions: dict[str, str]
+
+
 class AssigneeIn(BaseModel):
     name: str = ""
 
@@ -159,6 +166,7 @@ class GalleryPhotoIn(BaseModel):
 class GalleryPhotoEditIn(BaseModel):
     kind: str | None = None
     to_client: bool | None = None
+    line: str | None = None  # назва рядка кошторису, до якого фото (клієнт бачить його поруч із рядком)
 
 
 class ClientOrderIn(BaseModel):
@@ -253,6 +261,7 @@ def create_app(
     ledger = UsageLedger(usage_path)
     comments = CommentStore(orders_dir)
     photos = PhotoStore(orders_dir)
+    approvals = ApprovalStore(orders_dir)
     stock = Stock(stock_path)
     rates = fx_mod.Rates(fx_path, fetch=fx_fetch)
 
@@ -265,6 +274,9 @@ def create_app(
         store.listeners.append(bot.order_saved)
         bot.render_pdf = lambda order: render_pdf(order, catalog.service, fx_rate())
         bot.uah_rate = lambda: fx_rate()
+        bot.approvals = approvals
+        for number, old in list(bot.links.get("approvals", {}).items()):  # погодження зі старої версії
+            approvals.import_legacy(number, old)
         bot.service_name = catalog.service.get("name", "")
         bot.service_address = catalog.service.get("address", "")
         bot.photos = photos
@@ -295,7 +307,8 @@ def create_app(
     @app.middleware("http")
     async def require_login(request: Request, call_next):
         # Іконки й маніфест браузер запитує без cookie (ярлик на головному екрані) — вони публічні.
-        if request.url.path in PUBLIC_PATHS or request.url.path.startswith("/icons/") \
+        # /c/<токен> — сторінка замовлення для клієнта: доступ за посиланням із неповторним токеном.
+        if request.url.path in PUBLIC_PATHS or request.url.path.startswith(("/icons/", "/c/")) \
                 or is_authorized(request.cookies.get(AUTH_COOKIE)):
             return await call_next(request)
         if request.url.path.startswith("/api/"):
@@ -679,6 +692,34 @@ def create_app(
         rate = fx_rate()
         return {"rate": str(rate["rate"].normalize()), "date": rate["date"], "source": rate["source"]} if rate else None
 
+    @app.post("/api/order/approval/defer")
+    def defer_to_recommendations(response: Response, tesla_ro_sid: str | None = Cookie(None)):
+        """Відкладені клієнтом рядки прибрати із замовлення й записати в рекомендації (нагадаємо пізніше)."""
+        conv = conversation(tesla_ro_sid, response)
+
+        def action():
+            order = conv.session.order
+            rec = approvals.get(order.number)
+            if not rec or rec["status"] not in ("partial", "declined"):
+                raise ToolError("Немає відкладених клієнтом робіт")
+            later = [x for x in rec["lines"] if x["decision"] == "deferred"]
+            moved = []
+            # з кінця, щоб номери рядків не зсувалися; рядок має збігатися за назвою (замовлення могли змінити)
+            for x in sorted(later, key=lambda x: -int(x["key"].split(":")[1])):
+                kind, i = x["key"].split(":")
+                rows = order.labor if kind == "labor" else order.parts
+                if int(i) < len(rows) and rows[int(i)].name == x["name"]:
+                    rows.pop(int(i))
+                    moved.append(x)
+            if not moved:
+                raise ToolError("Відкладені рядки вже прибрано або змінено")
+            day = now_str().split(" ")[0]
+            for x in sorted(moved, key=lambda x: (x["kind"] != "labor", int(x["key"].split(":")[1]))):
+                order.recommendations.append(f"Відкладено клієнтом {day}: {x['name']} — {fmt_money(x['total'])} {order.currency}")
+            conv.session._autosave()
+            return {"moved": len(moved)}
+        return edit_order(conv, action, "переніс відкладені клієнтом роботи в рекомендації")
+
     def sync_open_orders(order) -> None:
         """Зміну з Telegram (статус, відповідальний) переносимо у відкриті на сайті копії замовлення,
         інакше наступне автозбереження з браузера повернуло б старе."""
@@ -991,26 +1032,47 @@ def create_app(
         return {"link": link, "qr_svg": qr, "client": client["name"] if client else None,
                 "has_phone": bot.phone_key(order.customer.phone) is not None}
 
+    def public_url(request: Request) -> str:
+        """Адреса сайту для посилань клієнту (за проксі Render — з X-Forwarded-*)."""
+        if os.environ.get("PUBLIC_URL"):
+            return os.environ["PUBLIC_URL"].rstrip("/")
+        proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+        return f"{proto}://{host}"
+
+    def page_link(request: Request, number: str) -> str:
+        return f"{public_url(request)}/c/{approvals.token_for(number)}"
+
+    @app.post("/api/orders/{number}/share")
+    def share_link(number: str, request: Request):
+        """Посилання на сторінку замовлення для клієнта — можна надіслати у Viber, SMS тощо."""
+        saved_order(number)
+        return {"link": page_link(request, number)}
+
     @app.post("/api/orders/{number}/send-approval")
-    def send_approval(number: str):
-        order = saved_order_for_client(number)
-        if not order.labor and not order.parts:
-            raise HTTPException(400, "У кошторисі ще немає робіт і запчастин")
+    def send_approval(number: str, request: Request):
+        """Почати погодження кошторису: посилання на сторінку (по пунктах) і, якщо клієнт у боті, — у Telegram."""
+        order = saved_order(number)
         try:
-            approval = bot.send_for_approval(order)
-        except ClientNotConnected:
-            raise HTTPException(409, "Клієнт ще не підключив бота — покажіть йому QR-код або надішліть посилання") from None
-        except PdfUnavailable:
-            raise HTTPException(503, "PDF недоступний на сервері") from None
-        except (TelegramError, httpx.HTTPError) as exc:
-            raise HTTPException(502, f"Telegram: {exc}") from None
-        return {"approval": approval}
+            approvals.create(order)
+        except ApprovalError as exc:
+            raise HTTPException(400, str(exc)) from None
+        link, telegram = page_link(request, number), None
+        if bot and bot.client_for(order):
+            try:
+                bot.send_for_approval(order, link)
+                telegram = True
+            except PdfUnavailable:
+                raise HTTPException(503, "PDF недоступний на сервері") from None
+            except (TelegramError, httpx.HTTPError) as exc:
+                telegram = f"Telegram: {exc}"
+        return {"approval": approvals.get(number), "link": link, "telegram": telegram}
 
     @app.post("/api/orders/{number}/send-telegram")
-    def send_telegram(number: str):
+    def send_telegram(number: str, request: Request):
         order = saved_order_for_client(number)
         try:
-            client = bot.send_to_client(order)
+            client = bot.send_to_client(order, page_link(request, number))
         except ClientNotConnected:
             raise HTTPException(409, "Клієнт ще не підключив бота — покажіть йому QR-код або надішліть посилання") from None
         except PdfUnavailable:
@@ -1372,7 +1434,7 @@ def create_app(
     def tile(o, now) -> dict:
         since = since_status(o)
         days = days_since(since, now)
-        approval = bot.approval(o.number) if bot else None
+        approval = approvals.get(o.number)
         nxt = NEXT_STATUS.get(o.status)
         return {
             "number": o.number, "status": o.status, "since": since, "days": round(days, 1) if days is not None else None,
@@ -1410,12 +1472,11 @@ def create_app(
             if t["stale"]:
                 alerts.append({"kind": "stale", "number": t["number"],
                                "text": f"{t['number']} — у роботі вже {int(t['days'])} дн. ({t['car'] or t['client'] or '—'})"})
-        if bot:
-            for number, a in bot.links["approvals"].items():
-                waited = days_since(a.get("sent_at", ""), now)
-                if a.get("status") == "pending" and waited is not None and waited >= 1:
-                    alerts.append({"kind": "approval", "number": number,
-                                   "text": f"{number} — клієнт не відповів на кошторис {int(waited)} дн."})
+        for number, a in approvals.all().items():
+            waited = days_since(a.get("sent_at", ""), now)
+            if a.get("status") == "pending" and waited is not None and waited >= 1:
+                alerts.append({"kind": "approval", "number": number,
+                               "text": f"{number} — клієнт не відповів на кошторис {int(waited)} дн."})
         for t in board["готово"]:
             if t["days"] is not None and t["days"] >= 2:
                 alerts.append({"kind": "pickup", "number": t["number"],
@@ -1462,21 +1523,93 @@ def create_app(
         sync_open_orders(order)
         return {"status": order.status, "balance": str(order.balance())}
 
+    # --- сторінка замовлення для клієнта (/c/<токен>) ---
+
+    def order_by_token(token: str):
+        number = approvals.number_for(token)
+        try:
+            return store.load(number) if number else None
+        except FileNotFoundError:
+            return None
+
+    def client_photos(order) -> list[dict]:
+        rec = approvals.get(order.number)
+        names = {x.name for x in (*order.labor, *order.parts)} | {x["name"] for x in (rec or {}).get("lines", [])}
+        return [p for p in photos.list(order.number) if p.get("to_client") or (p.get("line") and p["line"] in names)]
+
+    NOT_FOUND_PAGE = ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+                      "<title>Посилання недійсне</title><body style='font-family:system-ui;padding:40px;text-align:center'>"
+                      "<h2>Посилання недійсне</h2><p>Попросіть майстра надіслати нове посилання.</p></body>")
+
+    @app.get("/c/{token}", response_class=HTMLResponse)
+    def client_page(token: str):
+        order = order_by_token(token)
+        if order is None:
+            return HTMLResponse(NOT_FOUND_PAGE, status_code=404)
+        html_page = render_client_page(order, catalog.service, token, approvals.get(order.number), client_photos(order),
+                                       fx_rate(), act=bool(order.intake.get("signature")))
+        return HTMLResponse(html_page, headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+    @app.get("/c/{token}/pdf")
+    def client_pdf(token: str):
+        order = order_by_token(token)
+        if order is None:
+            raise HTTPException(404, "Посилання недійсне")
+        return pdf_response(order)
+
+    @app.get("/c/{token}/act.pdf")
+    def client_act(token: str):
+        order = order_by_token(token)
+        if order is None or not order.intake.get("signature"):
+            raise HTTPException(404, "Акт не знайдено")
+        try:
+            pdf = render_act_pdf(order, catalog.service, **act_parts(order))
+        except PdfUnavailable:
+            raise HTTPException(503, "PDF тимчасово недоступний") from None
+        name = quote(f"Акт приймання {order.number}.pdf")
+        return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f"inline; filename*=UTF-8''{name}"})
+
+    @app.get("/c/{token}/photo/{photo_id}")
+    def client_photo(token: str, photo_id: str):
+        order = order_by_token(token)
+        if order is None or photo_id not in {p["id"] for p in client_photos(order)}:
+            raise HTTPException(404, "Фото не знайдено")
+        return FileResponse(photos.path(order.number, photo_id), headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.post("/c/{token}/approve")
+    def client_approve(token: str, body: ClientApproveIn):
+        order = order_by_token(token)
+        if order is None:
+            raise HTTPException(404, "Посилання недійсне")
+        who = order.customer.name or "Клієнт"
+        try:
+            rec = approvals.decide(order.number, body.decisions, via="web", by=who)
+        except ApprovalError as exc:
+            raise HTTPException(409, str(exc)) from None
+        icon = {"approved": "✅", "partial": "🟡", "declined": "❌"}[rec["status"]]
+        with contextlib.suppress(CommentError, FileNotFoundError):
+            comments.add(order.number, f"Клієнт: {who}", f"{icon} Клієнт {approval_summary(rec)} (на сторінці)", source="web")
+        if bot:
+            try:
+                bot.approval_decided(order.number, rec, who)
+            except Exception:  # сповіщення не повинні ламати відповідь клієнту
+                pass
+        return {"status": rec["status"]}
+
     # --- фото до замовлення ---
 
     def extras(order) -> dict:
         number = order.number
         parts = {line.part_no for line in order.parts if line.part_no in catalog.parts}
         rate = fx_rate()
-        return {"photos": photos.list(number), "approval": bot.approval(number) if bot else None,
+        return {"photos": photos.list(number), "approval": approvals.get(number),
                 "stock": {p: stock.qty(p) for p in parts},
                 "uah": {**fx_mod.describe(rate, order.totals()["total"]), "balance": str(fx_mod.uah(order.balance(), rate["rate"]))}
                 if rate else None}
 
     @app.get("/api/orders/{number}/extras")
     def order_extras(number: str):
-        result = {"photos": photos.list(number), "comments": comments.list(number),
-                  "approval": bot.approval(number) if bot else None}
+        result = {"photos": photos.list(number), "comments": comments.list(number), "approval": approvals.get(number)}
         with contextlib.suppress(FileNotFoundError, ValueError):
             saved = store.load(number)  # статус і відповідального могли змінити кнопками в Telegram
             result.update(extras(saved), status=saved.status, assignee=saved.assignee)
@@ -1501,7 +1634,7 @@ def create_app(
     @app.patch("/api/orders/{number}/photos/{photo_id}")
     def edit_gallery_photo(number: str, photo_id: str, body: GalleryPhotoEditIn):
         try:
-            photos.update(number, photo_id, body.kind, body.to_client)
+            photos.update(number, photo_id, body.kind, body.to_client, body.line)
         except GalleryError as exc:
             raise HTTPException(400, str(exc)) from None
         except (KeyError, FileNotFoundError):

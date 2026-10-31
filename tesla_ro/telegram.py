@@ -31,6 +31,8 @@ from pathlib import Path
 import httpx
 
 from . import bookings as bk
+from .approvals import ApprovalError
+from .approvals import summary as approvals_summary
 from .clients import phone_key as _phone_key
 from .fx import uah as fx_uah
 from .comments import CommentError, CommentStore
@@ -163,6 +165,7 @@ class TelegramBot:
         self.render_pdf = None  # order -> bytes; задає web.py (друкована форма у PDF)
         self.render_act = None  # order -> bytes: акт приймання у PDF; задає web.py
         self.uah_rate = None  # () -> курс гривні або None; задає web.py
+        self.approvals = None  # ApprovalStore; задає web.py
         self.service_name = ""
         self.service_address = ""
         self.photos = None  # PhotoStore; задає web.py
@@ -746,10 +749,13 @@ class TelegramBot:
             raise ClientNotConnected("Клієнт ще не підключений до бота")
         return client
 
-    def send_to_client(self, order: RepairOrder) -> dict:
-        """Надіслати PDF (і фото, позначені «клієнту») клієнту, який уже підключився до бота."""
+    def send_to_client(self, order: RepairOrder, page_url: str = "") -> dict:
+        """Надіслати PDF (і фото, позначені «клієнту») клієнту, який уже підключився до бота.
+        page_url — посилання на сторінку замовлення (статус, фото, документи)."""
         client = self._client_or_raise(order)
-        self._send_order_document(client["chat_id"], order)
+        caption = (f"Замовлення-наряд № {order.number}" + (f" · {self.service_name}" if self.service_name else "")
+                   + self._to_pay(order) + (f"\nСтатус ремонту й документи: {page_url}" if page_url else ""))
+        self._send_order_document(client["chat_id"], order, caption)
         if order.intake.get("signature") and self.render_act:
             self.api.send_document(client["chat_id"], f"Акт приймання {order.number}.pdf", self.render_act(order),
                                    f"Акт приймання автомобіля до замовлення-наряду № {order.number}")
@@ -797,27 +803,51 @@ class TelegramBot:
     # --- погодження кошторису ---
 
     def approval(self, number: str) -> dict | None:
-        return self.links["approvals"].get(number)
+        return self.approvals.get(number) if self.approvals else None
 
-    def send_for_approval(self, order: RepairOrder) -> dict:
-        """Надіслати клієнту кошторис (PDF) із кнопками «Погоджую / Відмовляюсь»."""
+    def send_for_approval(self, order: RepairOrder, page_url: str = "") -> dict:
+        """Надіслати клієнту кошторис (PDF) з кнопками «Погоджую все / Відмовляюсь» і посиланням,
+        щоб вибрати по пунктах. Погодження вже створене (web.py); тут — лише надсилання."""
         client = self._client_or_raise(order)
         total = order.totals()["total"]
         caption = (f"Кошторис № {order.number}" + (f" · {self.service_name}" if self.service_name else "")
-                   + f"\nСума: {money(total)} {order.currency}\n\nПогоджуєте виконання робіт?")
-        keyboard = {"inline_keyboard": [[
-            {"text": "✅ Погоджую", "callback_data": f"ap:{order.number}:{APPROVE}"},
-            {"text": "❌ Відмовляюсь", "callback_data": f"ap:{order.number}:{DECLINE}"}]]}
-        message_id = self._send_order_document(client["chat_id"], order, caption, keyboard)
-        approval = {"status": "pending", "total": str(total), "currency": order.currency,
-                    "chat_id": client["chat_id"], "message_id": message_id, "sent_at": now_str(), "at": ""}
-        with self._lock:
-            self.links["approvals"][order.number] = approval
-            self._save_links()
+                   + f"\nСума: {money(total)} {order.currency}"
+                   + "\n\nПогоджуєте виконання робіт? Можна погодити все або вибрати по пунктах.")
+        rows = [[{"text": "✅ Погоджую все", "callback_data": f"ap:{order.number}:{APPROVE}"},
+                 {"text": "❌ Відмовляюсь", "callback_data": f"ap:{order.number}:{DECLINE}"}]]
+        if page_url.startswith("https://"):  # Telegram приймає в кнопках лише публічні https-адреси
+            rows.append([{"text": "🔎 Обрати по пунктах", "url": page_url}])
+        message_id = self._send_order_document(client["chat_id"], order, caption, {"inline_keyboard": rows})
+        self.approvals.set_message(order.number, client["chat_id"], message_id)
         self._send_client_photos(client["chat_id"], order.number)
         self._note_in_group(order.number, f"📝 {escape(order.number)}: кошторис на {money(total)} "
                                           f"{escape(order.currency)} надіслано клієнту на погодження")
-        return approval
+        return self.approval(order.number)
+
+    def approval_decided(self, number: str, rec: dict, who: str) -> None:
+        """Клієнт відповів (у Telegram чи на сторінці): прибрати кнопки, подякувати, написати в групу."""
+        icon = {"approved": "✅", "partial": "🟡", "declined": "❌"}.get(rec["status"], "📝")
+        if rec.get("chat_id") and rec.get("message_id"):
+            try:  # прибрати кнопки, щоб не натиснули вдруге
+                self.api.call("editMessageReplyMarkup", chat_id=rec["chat_id"], message_id=rec["message_id"],
+                              reply_markup={"inline_keyboard": []})
+            except (TelegramError, httpx.HTTPError):
+                pass
+            text = {"approved": f"✅ Дякуємо! Кошторис № {number} погоджено. Ми беремося до роботи.",
+                    "partial": f"✅ Дякуємо! Виконаємо погоджені роботи за кошторисом № {number}. "
+                               "Відкладені — нагадаємо пізніше.",
+                    "declined": f"Зрозуміли, роботи за кошторисом № {number} не виконуватимемо. "
+                                "Майстер зв'яжеться з вами."}.get(rec["status"])
+            if text:
+                try:
+                    self.api.call("sendMessage", chat_id=rec["chat_id"], text=text)
+                except (TelegramError, httpx.HTTPError):
+                    log.exception("Telegram: не вдалося подякувати клієнту")
+        self._note_in_group(number, f"{icon} {escape(number)}: клієнт <b>{escape(approvals_summary(rec))}</b>"
+                                    + (" (на сторінці)" if rec.get("via") == "web" else ""))
+        with self._lock:
+            self._dirty.add(number)  # лічильник коментарів у картці
+        self._wake.set()
 
     def _callback(self, query: dict) -> None:
         data = query.get("data") or ""
@@ -826,51 +856,30 @@ class TelegramBot:
         if parts[0] in ("st", "me") and len(parts) >= 2:
             self._staff_callback(query, parts)
             return
-        if len(parts) != 3 or parts[0] != "ap":
+        if len(parts) != 3 or parts[0] != "ap" or self.approvals is None:
             self.api.call("answerCallbackQuery", callback_query_id=query["id"])
             return
         number, answer = parts[1], parts[2]
         chat_id = msg.get("chat", {}).get("id")
-        with self._lock:
-            approval = self.links["approvals"].get(number)
-            valid = (approval is not None and approval["chat_id"] == chat_id
-                     and approval.get("message_id") in (None, msg.get("message_id")))
-            if not valid:
-                reply = "Цей кошторис застарів. Чекайте на новий від майстра."
-            elif approval["status"] != "pending":
-                reply = "Ви вже відповіли на цей кошторис."
-            else:
-                approval["status"] = "approved" if answer == APPROVE else "declined"
-                approval["at"] = now_str()
-                self._save_links()
-                reply = None
-        if reply:
-            self.api.call("answerCallbackQuery", callback_query_id=query["id"], text=reply, show_alert=True)
+        rec = self.approvals.get(number)
+        if rec is None or rec.get("chat_id") != chat_id or rec.get("message_id") not in (None, msg.get("message_id")):
+            self.api.call("answerCallbackQuery", callback_query_id=query["id"], show_alert=True,
+                          text="Цей кошторис застарів. Чекайте на новий від майстра.")
             return
-        approved = approval["status"] == "approved"
-        self.api.call("answerCallbackQuery", callback_query_id=query["id"],
-                      text="Дякуємо! Роботи погоджено." if approved else "Зрозуміли, роботи не виконуватимемо.")
-        try:  # прибрати кнопки, щоб не натиснули вдруге
-            self.api.call("editMessageReplyMarkup", chat_id=chat_id, message_id=msg.get("message_id"),
-                          reply_markup={"inline_keyboard": []})
-        except TelegramError:
-            pass
-        sum_text = f"{money(approval['total'])} {approval.get('currency', '$')}"
-        self.api.call("sendMessage", chat_id=chat_id, text=(
-            f"✅ Дякуємо! Кошторис № {number} на {sum_text} погоджено. Ми беремося до роботи." if approved else
-            f"Зрозуміли, роботи за кошторисом № {number} не виконуватимемо. Майстер зв'яжеться з вами."))
-        verdict = "погодив" if approved else "відхилив"
-        client = self.author(query.get("from", {}))
+        who = self.author(query.get("from", {}))
         try:
-            self.comments.add(number, f"Клієнт: {client}", f"{'✅' if approved else '❌'} Клієнт {verdict} кошторис "
-                              f"на {sum_text} (Telegram)", source="telegram")
+            rec = self.approvals.decide_all(number, answer == APPROVE, via="telegram", by=who)
+        except ApprovalError as exc:
+            self.api.call("answerCallbackQuery", callback_query_id=query["id"], text=str(exc), show_alert=True)
+            return
+        self.api.call("answerCallbackQuery", callback_query_id=query["id"],
+                      text="Дякуємо! Роботи погоджено." if rec["status"] == "approved" else "Зрозуміли, роботи не виконуватимемо.")
+        try:
+            self.comments.add(number, f"Клієнт: {who}", f"{'✅' if rec['status'] == 'approved' else '❌'} Клієнт "
+                              f"{approvals_summary(rec)} (Telegram)", source="telegram")
         except (CommentError, FileNotFoundError):
             log.exception("Не вдалося записати погодження в коментарі")
-        self._note_in_group(number, f"{'✅' if approved else '❌'} {escape(number)}: клієнт <b>{verdict}</b> "
-                                    f"кошторис на {escape(sum_text)}")
-        with self._lock:
-            self._dirty.add(number)  # лічильник коментарів у картці
-        self._wake.set()
+        self.approval_decided(number, rec, who)
 
     # --- розсилка ---
 
@@ -986,7 +995,7 @@ class TelegramBot:
                 continue
             if days >= STALE_DAYS:
                 stale.append((days, o))
-        pending = [n for n, a in self.links["approvals"].items() if a.get("status") == "pending"]
+        pending = [n for n, a in (self.approvals.all() if self.approvals else {}).items() if a.get("status") == "pending"]
         load: dict[str, int] = {}
         for o in active:
             load[o.assignee or "без відповідального"] = load.get(o.assignee or "без відповідального", 0) + 1
