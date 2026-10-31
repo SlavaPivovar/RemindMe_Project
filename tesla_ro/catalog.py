@@ -49,6 +49,8 @@ class Catalog:
         self.currency: str = data.get("currency", "$")
         self.vat_percent: float = data.get("vat_percent", 0)
         self.prices_include_vat: bool = data.get("prices_include_vat", True)
+        # Гривня поруч із доларом: mode — off / nbu / manual; markup — націнка до курсу НБУ, %.
+        self.fx: dict = {"mode": "nbu", "manual_rate": 0, "markup": 0, **data.get("fx", {})}
         # Старий формат довідника (нормогодини × ставка) переводиться у фіксовані ціни.
         legacy_rate = data.get("labor_rate_per_hour", 0)
         self.operations = {}
@@ -85,6 +87,7 @@ class Catalog:
             "currency": self.currency,
             "vat_percent": self.vat_percent,
             "prices_include_vat": self.prices_include_vat,
+            "fx": self.fx,
             "operations": [asdict(o) for o in self.operations.values()],
             "parts": [asdict(p) for p in self.parts.values()],
         }
@@ -229,8 +232,17 @@ class Catalog:
             "inn": self._text(data.get("inn"), "ЄДРПОУ", 20, required=False),
         }
         vat = self._number(data.get("vat_percent"), "ПДВ", 0, 100)
+        fx = dict(self.fx)
+        if "uah_mode" in data:
+            if data["uah_mode"] not in ("off", "nbu", "manual"):
+                raise CatalogError("Невідомий режим показу гривні")
+            fx["mode"] = data["uah_mode"]
+            fx["markup"] = self._number(data.get("uah_markup") or 0, "Націнка до курсу", -20, 50)
+            fx["manual_rate"] = self._number(data.get("uah_rate") or 0, "Свій курс", 0, 1000)
+            if fx["mode"] == "manual" and not fx["manual_rate"]:
+                raise CatalogError("Вкажіть свій курс долара")
         with self.lock:
-            self._commit(service=service, vat_percent=vat,
+            self._commit(service=service, vat_percent=vat, fx=fx,
                          prices_include_vat=bool(data.get("prices_include_vat", self.prices_include_vat)))
 
     def search_operations(self, query: str, model_code: str | None = None) -> list[Operation]:

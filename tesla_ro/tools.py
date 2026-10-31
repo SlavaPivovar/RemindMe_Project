@@ -445,7 +445,7 @@ class OrderSession:
                                                                            exclude=self.order.number)[:10]]
         data["comments"] = self.comments.list(self.order.number) if self.comments else []
         if self.extras:
-            data.update(self.extras(self.order.number))
+            data.update(self.extras(self.order))
         return data
 
     def get_order(self) -> str:

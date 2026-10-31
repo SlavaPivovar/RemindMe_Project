@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from .acts import INTAKE_ITEMS, ActError, Signatures, render_act_html, render_act_pdf, update_intake
 from .assistant import MODEL, RepairOrderAssistant
 from . import bookings as bk
+from . import fx as fx_mod
 from .backup import TELEGRAM_LIMIT, backup_filename, make_backup
 from .catalog import DEFAULT_CATALOG, MODEL_CODES, Catalog, CatalogError
 from .clients import build_clients, months_since, personalize
@@ -93,6 +94,7 @@ class StatusIn(BaseModel):
 
 class PaymentIn(BaseModel):
     amount: str
+    currency: str = "USD"  # USD або UAH — тоді сума перераховується в $ за поточним курсом
     method: str = "готівка"
     note: str = ""
     by: str = ""
@@ -237,6 +239,8 @@ def create_app(
     telegram=None,
     bookings_path: str | Path | None = None,
     stock_path: str | Path | None = None,
+    fx_path: str | Path | None = None,
+    fx_fetch=None,
 ) -> FastAPI:
     """password — пароль для входу; без нього вхід не потрібен (лише для локального запуску).
     catalog_path — файл довідника, який редагується з інтерфейсу; за його відсутності створюється
@@ -250,12 +254,17 @@ def create_app(
     comments = CommentStore(orders_dir)
     photos = PhotoStore(orders_dir)
     stock = Stock(stock_path)
+    rates = fx_mod.Rates(fx_path, fetch=fx_fetch)
+
+    def fx_rate() -> dict | None:
+        return rates.current(catalog.fx)
     signatures = Signatures(orders_dir)
     # telegram — фабрика (store, comments) -> TelegramBot | None; бот бачить кожне збереження замовлення.
     bot = telegram(store, comments) if telegram else None
     if bot:
         store.listeners.append(bot.order_saved)
-        bot.render_pdf = lambda order: render_pdf(order, catalog.service)
+        bot.render_pdf = lambda order: render_pdf(order, catalog.service, fx_rate())
+        bot.uah_rate = lambda: fx_rate()
         bot.service_name = catalog.service.get("name", "")
         bot.service_address = catalog.service.get("address", "")
         bot.photos = photos
@@ -412,6 +421,7 @@ def create_app(
         return {"order": conv.session.snapshot(), "history": history, "service": catalog.service,
                 "statuses": STATUSES, "telegram": bot is not None, "photo_kinds": PHOTO_KINDS,
                 "intake_items": INTAKE_ITEMS,
+                "fx": fx_view(),
                 "short_name": short_name(catalog.service.get("name") or service_name),
                 "backup_chat": bool(bot and bot.backup_chat_id),
                 "assignees": sorted({o.assignee for o in store.list() if o.assignee}),
@@ -585,13 +595,24 @@ def create_app(
         conv = conversation(tesla_ro_sid, response)
 
         def action():
+            amount, uah_info = body.amount, None
+            if body.currency == "UAH":
+                rate = fx_rate()
+                if rate is None:
+                    raise ToolError("Курс гривні недоступний — увімкніть його в налаштуваннях або внесіть суму в $")
+                try:
+                    value = Decimal(body.amount.replace(",", ".").replace(" ", ""))
+                except ArithmeticError:
+                    raise ToolError("Сума має бути числом") from None
+                amount, uah_info = str(fx_mod.to_usd(value, rate["rate"])), {"amount": value.quantize(Decimal("0.01")),
+                                                                                 "rate": rate["rate"].normalize()}
             try:
-                p = conv.session.order.add_payment(body.amount, body.method, body.by, body.note)
+                p = conv.session.order.add_payment(amount, body.method, body.by, body.note, uah=uah_info)
             except PaymentError as exc:
                 raise ToolError(str(exc)) from None
             conv.session._autosave()
             return {"payment": p}
-        note = f"прийняв оплату {body.amount} $ ({body.method})"
+        note = f"прийняв оплату {body.amount} {'грн' if body.currency == 'UAH' else '$'} ({body.method})"
         return edit_order(conv, action, note)
 
     # id — у параметрі запиту: шлях /api/order/<щось>/<n> уже зайнятий видаленням рядків замовлення.
@@ -627,7 +648,8 @@ def create_app(
         rows = payments_on(d.strftime("%d.%m.%Y"))
         by_method = {m: str(money(sum((Decimal(r["amount"]) for r in rows if r["method"] == m), Decimal("0"))))
                      for m in PAYMENT_METHODS}
-        return {"day": d.isoformat(), "payments": rows, "by_method": by_method,
+        received_uah = sum((Decimal(r["amount_uah"]) for r in rows if r.get("amount_uah")), Decimal("0"))
+        return {"day": d.isoformat(), "payments": rows, "by_method": by_method, "received_uah": str(money(received_uah)),
                 "total": str(money(sum((Decimal(r["amount"]) for r in rows), Decimal("0")))),
                 "methods": PAYMENT_METHODS}
 
@@ -652,6 +674,10 @@ def create_app(
         debts, overpaid = debts_list()
         return {"debts": debts, "overpaid": overpaid,
                 "total": str(money(sum((Decimal(d["balance"]) for d in debts), Decimal("0"))))}
+
+    def fx_view() -> dict | None:
+        rate = fx_rate()
+        return {"rate": str(rate["rate"].normalize()), "date": rate["date"], "source": rate["source"]} if rate else None
 
     def sync_open_orders(order) -> None:
         """Зміну з Telegram (статус, відповідальний) переносимо у відкриті на сайті копії замовлення,
@@ -780,7 +806,10 @@ def create_app(
             "parts": [{"part_no": p.part_no, "name": p.name, "price": p.price, "unit": p.unit,
                        "used": used.get(p.part_no, 0)} for p in parts.values()],
             "models": [{"code": m, "name": model_names[m]} for m in MODEL_CODES],
-            "settings": {**catalog.service, "vat_percent": catalog.vat_percent, "prices_include_vat": catalog.prices_include_vat},
+            "settings": {**catalog.service, "vat_percent": catalog.vat_percent, "prices_include_vat": catalog.prices_include_vat,
+                         "uah_mode": catalog.fx.get("mode", "nbu"), "uah_rate": catalog.fx.get("manual_rate", 0),
+                         "uah_markup": catalog.fx.get("markup", 0)},
+            "fx": fx_view(),
         }
 
     def edit(action, *args):
@@ -920,7 +949,7 @@ def create_app(
 
     def pdf_response(order) -> Response:
         try:
-            pdf = render_pdf(order, catalog.service)
+            pdf = render_pdf(order, catalog.service, fx_rate())
         except PdfUnavailable:
             raise HTTPException(503, "PDF недоступний на сервері — скористайтеся «Друк» → «Зберегти як PDF»") from None
         name = quote(pdf_filename(order))
@@ -995,12 +1024,12 @@ def create_app(
         conv = conversation(tesla_ro_sid, response)
         if conv.session.order is None:
             raise HTTPException(404, "Замовлення-наряд ще не створено")
-        return render_html(conv.session.order, catalog.service)
+        return render_html(conv.session.order, catalog.service, fx_rate())
 
     @app.get("/print/{number}", response_class=HTMLResponse)
     def print_saved(number: str):
         try:
-            return render_html(store.load(number), catalog.service)
+            return render_html(store.load(number), catalog.service, fx_rate())
         except FileNotFoundError:
             raise HTTPException(404, "Замовлення-наряд не знайдено") from None
 
@@ -1435,20 +1464,22 @@ def create_app(
 
     # --- фото до замовлення ---
 
-    def extras(number: str) -> dict:
-        try:
-            parts = {line.part_no for line in store.load(number).parts if line.part_no in catalog.parts}
-        except (FileNotFoundError, ValueError):
-            parts = set()
+    def extras(order) -> dict:
+        number = order.number
+        parts = {line.part_no for line in order.parts if line.part_no in catalog.parts}
+        rate = fx_rate()
         return {"photos": photos.list(number), "approval": bot.approval(number) if bot else None,
-                "stock": {p: stock.qty(p) for p in parts}}
+                "stock": {p: stock.qty(p) for p in parts},
+                "uah": {**fx_mod.describe(rate, order.totals()["total"]), "balance": str(fx_mod.uah(order.balance(), rate["rate"]))}
+                if rate else None}
 
     @app.get("/api/orders/{number}/extras")
     def order_extras(number: str):
-        result = {**extras(number), "comments": comments.list(number)}
+        result = {"photos": photos.list(number), "comments": comments.list(number),
+                  "approval": bot.approval(number) if bot else None}
         with contextlib.suppress(FileNotFoundError, ValueError):
             saved = store.load(number)  # статус і відповідального могли змінити кнопками в Telegram
-            result.update(status=saved.status, assignee=saved.assignee)
+            result.update(extras(saved), status=saved.status, assignee=saved.assignee)
         return result
 
     def saved_order(number: str):
@@ -1544,7 +1575,7 @@ def main(argv: list[str] | None = None) -> int:
     app = create_app(catalog_path, args.orders_dir, model=args.model, effort=args.effort,
                      password=password, secure_cookies=secure, secret=load_secret(data_dir),
                      usage_path=data_dir / "usage.jsonl", bookings_path=data_dir / "bookings.json",
-                     stock_path=data_dir / "stock.json",
+                     stock_path=data_dir / "stock.json", fx_path=data_dir / "fx.json",
                      telegram=lambda store, comments: telegram_from_env(store, comments, data_dir))
     if app.state.telegram:
         app.state.telegram.start()

@@ -32,6 +32,7 @@ import httpx
 
 from . import bookings as bk
 from .clients import phone_key as _phone_key
+from .fx import uah as fx_uah
 from .comments import CommentError, CommentStore
 from .order import DRAFT, STATUSES, OrderStore, RepairOrder, StatusError, now_str
 
@@ -161,6 +162,7 @@ class TelegramBot:
         self.links = self._load_links()
         self.render_pdf = None  # order -> bytes; задає web.py (друкована форма у PDF)
         self.render_act = None  # order -> bytes: акт приймання у PDF; задає web.py
+        self.uah_rate = None  # () -> курс гривні або None; задає web.py
         self.service_name = ""
         self.service_address = ""
         self.photos = None  # PhotoStore; задає web.py
@@ -780,15 +782,17 @@ class TelegramBot:
             result = self.api.call("sendMessage", chat_id=chat_id, text=caption, reply_markup=reply_markup)
         return result.get("message_id") if isinstance(result, dict) else None
 
-    @staticmethod
-    def _to_pay(order: RepairOrder) -> str:
-        """«Разом до сплати» з урахуванням передоплати."""
+    def _to_pay(self, order: RepairOrder) -> str:
+        """«Разом до сплати» з урахуванням передоплати й сумою в гривні, якщо курс увімкнено."""
         cur, paid, balance = order.currency, order.paid(), order.balance()
+        rate = self.uah_rate() if self.uah_rate else None
+        in_uah = lambda v: f" (≈ {money(fx_uah(v, rate['rate']))} грн)" if rate and v > 0 else ""  # noqa: E731
         if paid <= 0:
-            return f"\nРазом до сплати: {money(order.totals()['total'])} {cur}"
+            return f"\nРазом до сплати: {money(order.totals()['total'])} {cur}{in_uah(order.totals()['total'])}"
         if balance <= 0:
             return f"\nСума: {money(order.totals()['total'])} {cur}, сплачено повністю"
-        return f"\nСума: {money(order.totals()['total'])} {cur}, сплачено {money(paid)} {cur}, до сплати: {money(balance)} {cur}"
+        return (f"\nСума: {money(order.totals()['total'])} {cur}, сплачено {money(paid)} {cur}, "
+                f"до сплати: {money(balance)} {cur}{in_uah(balance)}")
 
     # --- погодження кошторису ---
 

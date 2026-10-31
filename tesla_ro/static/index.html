@@ -220,7 +220,11 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .pay-list button{padding:1px 7px;font-size:12px}
 .pay-sum{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;margin:8px 0;font-size:14px}
 .pay-sum .due{color:var(--accent)}
-.pay-form{display:grid;grid-template-columns:110px auto minmax(0,1fr) auto;gap:6px}
+.pay-form{display:flex;flex-wrap:wrap;gap:6px}
+.pay-form #payAmount{flex:1 1 90px;max-width:140px}
+.pay-form #payMethod{flex:0 1 auto}
+.pay-form #payNote{flex:2 1 160px}
+.pay-form button{flex:1 0 auto}
 .pay-form input,.pay-form select{font:inherit;font-size:14px;padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);min-width:0}
 .cash-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:10px 0}
 .cash-tiles div{background:var(--bg);border-radius:10px;padding:8px 12px}
@@ -236,6 +240,11 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .sign-pad canvas{width:100%;height:200px;background:#fff;border:1px dashed var(--muted);border-radius:10px;touch-action:none;display:block;margin:8px 0 4px}
 .sign-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .sign-row input{flex:1;min-width:160px;font:inherit;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.totals .uah{color:var(--muted)}
+.totals .uah-rate{font-size:11px;color:var(--muted);text-align:right}
+.uah-opts{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px}
+.uah-opts label{display:flex;align-items:center;gap:6px;padding:0;color:var(--muted);font-size:13px}
+.uah-opts input{width:90px !important}
 .tg{font-size:12px;white-space:nowrap;color:var(--ok)}
 .tg.off{color:var(--muted)}
 tr.click{cursor:pointer}
@@ -287,9 +296,8 @@ button.danger-lite{color:var(--accent)}
   .info{grid-template-columns:1fr}
   #catalogList .hide-m,#orderBody .hide-m,#clientsBody .hide-m,#cashBody .hide-m{display:none}
   .bk-agent textarea{grid-column:1 / -1;min-height:64px}
-  .pay-form{grid-template-columns:1fr 1fr}
-  .pay-form #payNote{grid-column:1 / -1}
-  .pay-form button{grid-column:1 / -1}
+  .pay-form #payAmount{max-width:none}
+  .pay-form #payNote,.pay-form button{flex-basis:100%}
   .pay-list div{grid-template-columns:minmax(0,1fr) auto auto}
   .pay-list span:first-child{grid-column:1 / -1}
   .bk-agent .mic{justify-self:end}
@@ -769,24 +777,31 @@ function renderPayments(o){
   const bal = Number(o.balance), cur = esc(o.currency);
   box.innerHTML = `<div class="sec-head"><h3>💵 Оплата</h3><span class="pay-st ${PAY_CLASS[o.payment_status] || ""}">${esc(o.payment_status)}</span></div>
     ${o.payments.length ? `<div class="pay-list">${o.payments.map(p => `<div><span>${esc(p.at)}</span><span>${esc(p.method)}${p.by ? " · " + esc(p.by) : ""}${p.note ? " · " + esc(p.note) : ""}</span>
-      <b class="${Number(p.amount) < 0 ? "neg" : ""}">${Number(p.amount) < 0 ? "повернення " : ""}${num(Math.abs(Number(p.amount)))} ${cur}</b><button data-pay-del="${esc(p.id)}" title="Видалити запис про оплату">✕</button></div>`).join("")}</div>` : ""}
+      <b class="${Number(p.amount) < 0 ? "neg" : ""}">${Number(p.amount) < 0 ? "повернення " : ""}${num(Math.abs(Number(p.amount)))} ${cur}${p.amount_uah ? `<small class="sub"> (${num(Math.abs(Number(p.amount_uah)))} грн)</small>` : ""}</b><button data-pay-del="${esc(p.id)}" title="Видалити запис про оплату">✕</button></div>`).join("")}</div>` : ""}
     <div class="pay-sum"><span>Сплачено: <b>${num(o.paid)} ${cur}</b></span>
-      <span>${bal > 0 ? `До сплати: <b class="due">${num(bal)} ${cur}</b>` : bal < 0 ? `Переплата: <b>${num(-bal)} ${cur}</b>` : Number(o.totals.total) > 0 ? "✓ Сплачено повністю" : ""}</span></div>
+      <span>${bal > 0 ? `До сплати: <b class="due">${num(bal)} ${cur}</b>${o.uah ? ` <span class="sub">≈ ${num(o.uah.balance)} грн</span>` : ""}` : bal < 0 ? `Переплата: <b>${num(-bal)} ${cur}</b>` : Number(o.totals.total) > 0 ? "✓ Сплачено повністю" : ""}</span></div>
     <form class="pay-form" id="payForm">
       <input id="payAmount" inputmode="decimal" aria-label="Сума" placeholder="Сума" value="${bal > 0 ? String(bal).replace(".", ",") : ""}">
+      ${o.uah ? `<select id="payCur" aria-label="Валюта"><option value="USD">$</option><option value="UAH">грн</option></select>` : ""}
       <select id="payMethod" aria-label="Спосіб оплати">${PAY_METHODS.map(m => `<option>${m}</option>`).join("")}</select>
       <input id="payNote" placeholder="Примітка (необов'язково)" aria-label="Примітка">
       <button class="primary">Прийняти оплату</button>
     </form>
     <div class="hint desc-m">Передоплату теж вносьте тут. Повернення клієнту — сума з мінусом.</div>`;
+  if ($("#payCur")) $("#payCur").onchange = e => {
+    if (bal <= 0) return;
+    $("#payAmount").value = (e.target.value === "UAH" ? Number(o.uah.balance) : bal).toFixed(2).replace(".", ",");
+  };
   $("#payForm").onsubmit = async e => {
     e.preventDefault();
     const amount = $("#payAmount").value.trim().replace(/\s/g, "").replace(",", ".");
     if (!amount || !Number(amount)){ $("#payAmount").focus(); return; }
-    const sum = `${Number(amount) < 0 ? "Повернути клієнту" : "Прийняти"} ${num(Math.abs(Number(amount)))} ${o.currency} (${$("#payMethod").value})?`;
+    const currency = $("#payCur") ? $("#payCur").value : "USD";
+    const sum = `${Number(amount) < 0 ? "Повернути клієнту" : "Прийняти"} ${num(Math.abs(Number(amount)))} ${currency === "UAH" ? "грн" : o.currency} (${$("#payMethod").value})?` +
+      (currency === "UAH" ? `\nБуде зараховано ≈ ${num(Math.abs(Number(amount)) / Number(o.uah.rate))} $ за курсом ${o.uah.rate}.` : "");
     if (!confirm(sum)) return;
     try{
-      const r = await api("/api/order/payments", {method: "POST", body: JSON.stringify({amount, method: $("#payMethod").value,
+      const r = await api("/api/order/payments", {method: "POST", body: JSON.stringify({amount, currency, method: $("#payMethod").value,
                                                                                      note: $("#payNote").value, by: authorName()})});
       renderOrder(r.order);
     }catch(err){ alert(err.message); }
@@ -945,6 +960,8 @@ function renderOrder(o){
       <div><span>Запчастини</span><span>${num(t.parts)} ${cur}</span></div>
       ${Number(o.vat_percent) ? `<div><span>${vat}</span><span>${num(t.vat)} ${cur}</span></div>` : ""}
       <div class="grand"><span>Разом</span><span>${num(t.total)} ${cur}</span></div>
+      ${o.uah ? `<div class="uah"><span>≈ у гривні</span><span>${num(o.uah.amount)} грн</span></div>
+        <div class="uah-rate">${esc(o.uah.source)} ${esc(String(o.uah.rate).replace(".", ","))} на ${esc(o.uah.date)}</div>` : ""}
     </div>
     <div id="sec-pay"></div><div class="pay" id="payBox"></div>
     <h3>Рекомендації</h3>
@@ -1542,11 +1559,12 @@ async function showCash(view){
       $("#cashBody").innerHTML = `<div class="bk-nav"><button data-cash-day="-1">◀</button>
           <input type="date" id="cashDate" value="${esc(c.day)}"><button data-cash-day="1">▶</button>
           <button data-cash-day="0">Сьогодні</button></div>
-        <div class="cash-tiles"><div><b>${num(c.total)} $</b>усього</div>${c.methods.map(m => `<div><b>${num(c.by_method[m])} $</b>${esc(m)}</div>`).join("")}</div>
+        <div class="cash-tiles"><div><b>${num(c.total)} $</b>усього</div>${c.methods.map(m => `<div><b>${num(c.by_method[m])} $</b>${esc(m)}</div>`).join("")}
+          ${Number(c.received_uah) ? `<div><b>${num(c.received_uah)} грн</b>у т.ч. прийнято гривнею</div>` : ""}</div>
         ${c.payments.length ? `<div class="tbl"><table><tr><th>Час</th><th>Замовлення</th><th class="hide-m">Клієнт</th><th>Спосіб</th><th class="r">Сума</th></tr>
           ${c.payments.map(p => `<tr><td>${esc(p.at.slice(11))}</td><td><button data-cash-open="${esc(p.number)}">${esc(p.number)}</button><div class="sub show-m">${esc(p.client)}</div></td>
             <td class="hide-m">${dash(p.client)}<div class="sub">${esc(p.vehicle)}${p.by ? " · прийняв(-ла) " + esc(p.by) : ""}${p.note ? " · " + esc(p.note) : ""}</div></td>
-            <td>${esc(p.method)}</td><td class="r">${num(p.amount)} $</td></tr>`).join("")}</table></div>`
+            <td>${esc(p.method)}</td><td class="r">${num(p.amount)} $${p.amount_uah ? `<div class="sub">${num(p.amount_uah)} грн</div>` : ""}</td></tr>`).join("")}</table></div>`
           : `<div class="empty">Оплат за цей день немає.</div>`}`;
       $("#cashDate").onchange = e => { if (e.target.value){ cashDay = e.target.value; showCash(); } };
     }else{
@@ -2295,6 +2313,14 @@ function renderSettingsForm(flash){
       <label for="sAddr">Адреса</label><input id="sAddr" value="${esc(s.address)}">
       <label for="sPhone">Телефон</label><input id="sPhone" value="${esc(s.phone)}" placeholder="не друкується, якщо порожньо">
       <label for="sInn">ЄДРПОУ</label><input id="sInn" value="${esc(s.inn)}" placeholder="не друкується, якщо порожньо">
+      <label for="sUah">Гривня</label>
+      <div><select id="sUah"><option value="nbu" ${s.uah_mode === "nbu" ? "selected" : ""}>показувати за курсом НБУ</option>
+          <option value="manual" ${s.uah_mode === "manual" ? "selected" : ""}>показувати за своїм курсом</option>
+          <option value="off" ${s.uah_mode === "off" ? "selected" : ""}>не показувати</option></select>
+        <div class="uah-opts"><label>Свій курс, грн/$ <input id="sUahRate" inputmode="decimal" value="${s.uah_rate ? String(s.uah_rate).replace(".", ",") : ""}"></label>
+          <label>Націнка до НБУ, % <input id="sUahMarkup" inputmode="decimal" value="${String(s.uah_markup || 0).replace(".", ",")}"></label></div>
+        <div class="hint">${catalogData.fx ? `Зараз: ${esc(catalogData.fx.source)} ${esc(String(catalogData.fx.rate).replace(".", ","))} грн/$ на ${esc(catalogData.fx.date)}.` : "Курс зараз недоступний."}
+          Сума в гривні показується в замовленні, друкованій формі й повідомленнях клієнту; оплату можна прийняти гривнею.</div></div>
       <label for="sVat">ПДВ, %</label>
       <div><input id="sVat" inputmode="decimal" value="${String(s.vat_percent).replace(".", ",")}">
         <div class="checks"><label><input type="checkbox" id="sVatIn" ${s.prices_include_vat ? "checked" : ""}> ціни вже містять ПДВ</label></div>
@@ -2333,7 +2359,8 @@ function renderSettingsForm(flash){
   $("#setForm").onsubmit = async e => {
     e.preventDefault();
     const body = {name: $("#sName").value, address: $("#sAddr").value, phone: $("#sPhone").value, inn: $("#sInn").value,
-                  vat_percent: $("#sVat").value, prices_include_vat: $("#sVatIn").checked};
+                  vat_percent: $("#sVat").value, prices_include_vat: $("#sVatIn").checked,
+                  uah_mode: $("#sUah").value, uah_rate: $("#sUahRate").value, uah_markup: $("#sUahMarkup").value};
     if (await saveCatalog("PUT", "/api/catalog/settings", body, "Налаштування збережено", "settings")){
       $("#brand").textContent = catalogData.settings.name; document.title = catalogData.settings.name;
     }

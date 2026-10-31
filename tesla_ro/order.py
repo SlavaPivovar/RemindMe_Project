@@ -160,7 +160,8 @@ class RepairOrder:
             return "оплачено"
         return "частково" if paid > 0 else "не оплачено"
 
-    def add_payment(self, amount, method: str, by: str = "", note: str = "") -> dict:
+    def add_payment(self, amount, method: str, by: str = "", note: str = "", uah: dict | None = None) -> dict:
+        """uah — оплата гривнею: {"amount": сума в грн, "rate": курс}; amount тоді — уже перерахована сума в $."""
         try:
             value = money(Decimal(str(amount).replace(",", ".").replace(" ", "")))
         except (ArithmeticError, ValueError):
@@ -170,7 +171,8 @@ class RepairOrder:
         if method not in PAYMENT_METHODS:
             raise PaymentError(f"Спосіб оплати: {', '.join(PAYMENT_METHODS)}")
         payment = {"id": secrets.token_hex(4), "at": now_str(), "amount": str(value), "method": method,
-                   "by": by.strip()[:80], "note": note.strip()[:200]}
+                   "by": by.strip()[:80], "note": note.strip()[:200],
+                   **({"amount_uah": str(uah["amount"]), "rate": str(uah["rate"])} if uah else {})}
         self.payments.append(payment)
         return payment
 

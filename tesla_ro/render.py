@@ -16,7 +16,8 @@ def _num(value: float) -> str:
     return f"{value:g}".replace(".", ",")
 
 
-def render_html(order: RepairOrder, service: dict | None = None) -> str:
+def render_html(order: RepairOrder, service: dict | None = None, uah: dict | None = None) -> str:
+    """uah — курс для суми в гривні: {"rate": Decimal, "date", "source"} (див. fx.Rates.current)."""
     service = service or {}
     e = lambda s: escape(str(s)) if s not in (None, "") else "—"  # noqa: E731
     c, v, t = order.customer, order.vehicle, order.totals()
@@ -52,6 +53,15 @@ def render_html(order: RepairOrder, service: dict | None = None) -> str:
                      + (f'<tr><td><b>Залишок до сплати:</b></td><td class=r><b>{fmt(balance)} {cur}</b></td></tr>'
                         if balance > 0 else '<tr><td colspan=2 class=r><b>Сплачено повністю</b></td></tr>'
                         if balance == 0 else f'<tr><td>Переплата:</td><td class=r>{fmt(-balance)} {cur}</td></tr>'))
+    uah_rows = ""
+    if uah:
+        from .fx import uah as to_uah
+
+        due = order.balance() if order.payments else t["total"]
+        uah_rows = (f'<tr><td>{"До сплати" if order.payments else "Разом"} у гривні:</td>'
+                    f'<td class=r><b>{fmt(to_uah(due, uah["rate"]))} грн</b></td></tr>'
+                    f'<tr><td colspan=2 class=r style="font-size:10px;color:#555">{escape(uah["source"])} '
+                    f'{fmt(uah["rate"])} грн/$ на {escape(uah["date"])}</td></tr>') if due > 0 else ""
     vat_label = (
         f"у т.ч. ПДВ {_num(order.vat_percent)}%" if order.prices_include_vat else f"ПДВ {_num(order.vat_percent)}%"
     )
@@ -99,7 +109,7 @@ th{{background:#eee;text-align:left}} .r{{text-align:right;white-space:nowrap}}
 <tr><td>Разом запчастини:</td><td class=r>{fmt(t["parts"])} {cur}</td></tr>
 {f'<tr><td>{vat_label}:</td><td class=r>{fmt(t["vat"])} {cur}</td></tr>' if order.vat_percent else ""}
 <tr><td><b>УСЬОГО ДО СПЛАТИ:</b></td><td class=r><b>{fmt(t["total"])} {cur}</b></td></tr>
-{paid_rows}</table>
+{paid_rows}{uah_rows}</table>
 {f"<h2>Рекомендації</h2><ul>{recs}</ul>" if recs else ""}
 
 <p style="margin-top:16px;font-size:11px;color:#444">З обсягом і вартістю робіт ознайомлений і згоден.
@@ -113,13 +123,13 @@ class PdfUnavailable(RuntimeError):
     """На сервері немає бібліотек для PDF (WeasyPrint і Pango)."""
 
 
-def render_pdf(order: RepairOrder, service: dict | None = None) -> bytes:
+def render_pdf(order: RepairOrder, service: dict | None = None, uah: dict | None = None) -> bytes:
     """Та сама друкована форма у PDF (A4) — для надсилання клієнту."""
     try:
         import weasyprint  # важка залежність із системними бібліотеками — імпортуємо лише за потреби
     except (ImportError, OSError) as exc:
         raise PdfUnavailable(str(exc)) from None
-    return weasyprint.HTML(string=render_html(order, service)).write_pdf()
+    return weasyprint.HTML(string=render_html(order, service, uah)).write_pdf()
 
 
 def pdf_filename(order: RepairOrder) -> str:
