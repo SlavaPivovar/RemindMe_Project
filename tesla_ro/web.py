@@ -12,6 +12,7 @@ import hmac
 import html
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -54,6 +55,8 @@ from .telegram import from_env as telegram_from_env
 from .vision import PhotoError, parse_data_url, recognize
 
 STATIC = Path(__file__).parent / "static"
+ICONS = STATIC / "icons"
+PUBLIC_PATHS = ("/login", "/logout", "/manifest.webmanifest", "/favicon.ico")
 COOKIE = "tesla_ro_sid"
 AUTH_COOKIE = "tesla_ro_auth"
 AUTH_TTL = 30 * 24 * 3600  # вхід діє 30 днів
@@ -281,16 +284,49 @@ def create_app(
 
     @app.middleware("http")
     async def require_login(request: Request, call_next):
-        if request.url.path in ("/login", "/logout") or is_authorized(request.cookies.get(AUTH_COOKIE)):
+        # Іконки й маніфест браузер запитує без cookie (ярлик на головному екрані) — вони публічні.
+        if request.url.path in PUBLIC_PATHS or request.url.path.startswith("/icons/") \
+                or is_authorized(request.cookies.get(AUTH_COOKIE)):
             return await call_next(request)
         if request.url.path.startswith("/api/"):
             return JSONResponse({"error": "Потрібно увійти"}, status_code=401)
         return RedirectResponse("/login", status_code=303)
 
+    # --- ярлик на головному екрані телефона (PWA) ---
+
+    def short_name(name: str) -> str:
+        """Підпис під іконкою: iPhone і Android обрізають усе довше ~12 символів."""
+        if len(name) <= 12:
+            return name
+        return re.sub(r"(?i)[\s\-·]*(service|сервіс)$", "", name)[:12] or name[:12]
+
+    @app.get("/manifest.webmanifest")
+    def manifest():
+        name = catalog.service.get("name") or service_name
+        icons = [{"src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+                 {"src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
+                 {"src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]
+        data = {"name": name, "short_name": short_name(name), "description": "Замовлення-наряди, запис і каса сервісу",
+                "lang": "uk", "start_url": "/", "scope": "/", "display": "standalone", "orientation": "any",
+                "background_color": "#f4f5f7", "theme_color": "#ffffff", "icons": icons}
+        return JSONResponse(data, media_type="application/manifest+json", headers={"Cache-Control": "public, max-age=3600"})
+
+    @app.get("/icons/{name}")
+    def icon(name: str):
+        path = ICONS / Path(name).name
+        if Path(name).name != name or path.suffix != ".png" or not path.exists():
+            raise HTTPException(404, "Немає такої іконки")
+        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=604800"})
+
+    @app.get("/favicon.ico")
+    def favicon():
+        return FileResponse(ICONS / "favicon-32.png", media_type="image/png", headers={"Cache-Control": "public, max-age=604800"})
+
     @app.get("/login", response_class=HTMLResponse)
     def login_page(error: str = ""):
         page = (STATIC / "login.html").read_text(encoding="utf-8")
         page = page.replace("<!--NAME-->", html.escape(catalog.service.get("name") or service_name))
+        page = page.replace("<!--SHORT-->", html.escape(short_name(catalog.service.get("name") or service_name)))
         return page.replace("<!--ERROR-->", '<p class="err">Невірний пароль</p>' if error else "")
 
     @app.post("/login")
@@ -375,6 +411,7 @@ def create_app(
         return {"order": conv.session.snapshot(), "history": history, "service": catalog.service,
                 "statuses": STATUSES, "telegram": bot is not None, "photo_kinds": PHOTO_KINDS,
                 "intake_items": INTAKE_ITEMS,
+                "short_name": short_name(catalog.service.get("name") or service_name),
                 "backup_chat": bool(bot and bot.backup_chat_id),
                 "assignees": sorted({o.assignee for o in store.list() if o.assignee}),
                 "auth": password is not None}

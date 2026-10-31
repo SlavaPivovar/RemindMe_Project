@@ -16,4 +16,4 @@ tesla-ro-web = "tesla_ro.web:main"
 include = ["tesla_ro*"]
 
 [tool.setuptools.package-data]
-tesla_ro = ["data/*.json", "static/*.html"]
+tesla_ro = ["data/*.json", "static/*.html", "static/icons/*.png"]
