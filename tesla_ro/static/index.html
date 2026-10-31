@@ -307,6 +307,73 @@ button.danger-lite{color:var(--accent)}
   header .label{display:none}
 }
 
+
+/* ---- головна ---- */
+#home{display:none;overflow:auto}
+body.home-mode main{grid-template-columns:minmax(0,1fr)}
+body.home-mode main > .card{display:none !important}
+body.home-mode main > #home{display:flex !important}
+#btnHome.on{background:var(--text);color:var(--bg);border-color:var(--text)}
+.home-body{padding:16px 20px 24px;display:flex;flex-direction:column;gap:16px}
+.home-body h3{margin:0 0 8px}
+.home-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px}
+.home-head h2{margin:0;font-size:20px}
+.mine-toggle{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--muted);cursor:pointer}
+.continue{text-align:left;border-color:var(--accent);color:var(--accent);font-weight:600;padding:10px 14px}
+.quick{display:flex;flex-wrap:wrap;gap:8px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.kpi{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 12px;border-radius:12px;background:var(--bg);text-align:left}
+.kpi b{font-size:22px;line-height:1.1}
+.kpi span{font-size:12px;color:var(--muted)}
+.kpi.good b{color:var(--ok)} .kpi.bad b{color:var(--accent)}
+.attn{border:1px solid var(--warn);background:var(--warn-bg);border-radius:12px;padding:10px 12px}
+.attn h3{color:var(--warn)}
+.attn-row{display:flex;gap:8px;width:100%;text-align:left;border:0;background:transparent;padding:6px 2px;color:var(--text)}
+.attn-row:hover{text-decoration:underline}
+.attn-more{display:none;margin-top:4px;border-color:var(--warn);color:var(--warn);background:transparent}
+@media (max-width:900px){
+  .attn.folded .attn-row:nth-of-type(n+4){display:none}
+  .attn.folded .attn-more{display:inline-block}
+}
+.board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:start}
+.stage-tabs{display:none;gap:6px;margin-bottom:8px}
+.stage-tabs button{flex:1;padding:8px 6px}
+.stage-tabs button.on{background:var(--text);color:var(--bg);border-color:var(--text)}
+#home-board{scroll-margin-top:8px}
+.col{background:var(--bg);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:8px;min-height:80px;scroll-margin-top:12px}
+.col-head{font-weight:600;font-size:14px;padding:4px 4px 0}
+.col-empty{padding:8px 4px}
+.htile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;display:flex;flex-direction:column;gap:3px;box-shadow:var(--shadow)}
+.htile:hover{border-color:var(--muted)}
+.htile.late{border-left:4px solid var(--accent)}
+.ht-top{display:flex;justify-content:space-between;align-items:center}
+.ht-age{font-size:12px;color:var(--muted);background:var(--bot);border-radius:999px;padding:1px 8px}
+.ht-age.bad{color:#fff;background:var(--accent)}
+.ht-car{font-weight:600}
+.ht-works{font-size:13px}
+.ht-meta,.ht-foot{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font-size:12px;color:var(--muted)}
+.ht-meta .ht-sum{font-size:14px;color:var(--text);font-weight:600}
+.ht-meta .ok,.ht-foot .ok{color:var(--ok)} .ht-meta .warn{color:var(--accent)}
+.ht-foot .mine{color:var(--text);font-weight:600}
+.ht-next{margin-left:auto;font-size:13px;padding:5px 10px}
+.hbook{display:flex;flex-direction:column;gap:6px}
+.hb{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.hb .t{font-weight:700;font-variant-numeric:tabular-nums}
+.hb.off{opacity:.55}
+.drafts{display:flex;flex-wrap:wrap;gap:6px}
+.drafts button{display:flex;flex-direction:column;align-items:flex-start;text-align:left}
+@media (max-width:900px){
+  .home-body{padding:12px 4px 20px}
+  .stage-tabs{display:flex}
+  .board{display:block}
+  .col{display:none;background:transparent;padding:0}
+  .col.sel{display:flex}
+  .col-head{display:none}
+  .quick button{flex:1 1 45%}
+  .kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .kpi b{font-size:18px}
+  #home{border:0;box-shadow:none;background:transparent}
+}
 /* ---- телефон і сенсорні екрани ---- */
 #btnMenu{display:none}
 .menu{position:fixed;top:56px;right:12px;z-index:50;display:flex;flex-direction:column;min-width:240px;padding:6px;
@@ -371,6 +438,7 @@ details.fold[open]>summary::before{content:"▾ "}
 <body>
 <header>
   <h1><span id="brand">DK-TeslaService</span> <span>· Замовлення-наряди</span></h1>
+  <button id="btnHome" title="Головна: замовлення в роботі, записи на сьогодні">🏠 <span class="label">Головна</span></button>
   <button id="btnCatalog" title="Довідник робіт">📚 <span class="label">Довідник</span></button>
   <button id="btnOrders" title="Збережені замовлення-наряди">📁 <span class="label">Збережені</span></button>
   <button id="btnClients" title="База клієнтів">👥 <span class="label">Клієнти</span></button>
@@ -381,6 +449,7 @@ details.fold[open]>summary::before{content:"▾ "}
   <button id="btnMenu" aria-haspopup="true" aria-expanded="false">☰ Меню</button>
 </header>
 <nav id="menuPanel" class="menu" hidden aria-label="Меню">
+  <button data-proxy="#btnHome">🏠 Головна</button>
   <button data-proxy="#btnOrders">📁 Збережені замовлення</button>
   <button data-proxy="#btnBookings">📅 Запис на сервіс</button>
   <button data-proxy="#btnClients">👥 Клієнти</button>
@@ -388,8 +457,9 @@ details.fold[open]>summary::before{content:"▾ "}
   <button data-proxy="#btnCatalog">📚 Довідник і склад</button>
   <button data-proxy="#btnLogout" class="menu-logout" id="menuLogout" hidden>⎋ Вийти</button>
 </nav>
-<div class="tabs"><button data-tab="chat" class="on">Чат</button><button data-tab="order">Замовлення-наряд</button></div>
+<div class="tabs"><button data-tab="home">🏠 Головна</button><button data-tab="chat" class="on">Чат</button><button data-tab="order">Замовлення</button></div>
 <main>
+  <section id="home" class="card"><div class="home-body" id="homeBody">Завантаження…</div></section>
   <section id="chat" class="card show">
     <div class="log" id="log"></div>
     <div class="hints" id="hints">
@@ -1053,6 +1123,7 @@ $("#ordersList").addEventListener("click", async e => {
     $("#log").innerHTML = "";
     addMsg("assistant", `Відкрито замовлення-наряд № ${open}. Що потрібно змінити?`);
     renderOrder(data.order);
+    document.querySelector('.tabs button[data-tab="order"]').click();
   }
 });
 
@@ -1758,6 +1829,172 @@ const catalogAddress = () => SERVICE_ADDRESS;
 
 $("#btnClients").onclick = showClients;
 
+// ---------- Головна: замовлення в роботі, записи на сьогодні, що потребує уваги ----------
+let homeData = null, homeMine = false, homeStage = null;
+try{ homeMine = localStorage.getItem("homeMine") === "1"; }catch(e){}
+const STAGES = [["прийнято", "📥 Прийнято"], ["в роботі", "🔧 В роботі"], ["готово", "✅ Готово до видачі"]];
+const ALERT_ICON = {stale: "⏰", approval: "📝", pickup: "🅿️", debt: "💸", stock: "📦", late: "🕒"};
+const daysLabel = d => d == null ? "" : d < 1 ? (d * 24 < 1 ? "щойно" : `${Math.floor(d * 24)} год`) : `${Math.floor(d)} дн.`;
+
+async function loadHome(){
+  if (!document.body.classList.contains("home-mode")) return;
+  try{ homeData = await api("/api/dashboard"); }
+  catch(e){ $("#homeBody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  renderHome();
+}
+
+function homeTile(t){
+  const me = authorName();
+  return `<div class="htile ${t.stale ? "late" : ""}" data-home-open="${esc(t.number)}" role="button" tabindex="0">
+    <div class="ht-top"><b>№ ${esc(t.number.replace(/^ЗН-\d{4}-0*/, ""))}</b>
+      <span class="ht-age ${t.stale ? "bad" : ""}" title="У цьому статусі з ${esc(t.since)}">${daysLabel(t.days)}</span></div>
+    <div class="ht-car">${esc(t.car || "—")}</div>
+    <div class="sub">${dash(t.client)}</div>
+    ${t.works.length ? `<div class="ht-works">${t.works.map(esc).join(", ")}${t.more_works ? ` +${t.more_works}` : ""}</div>` : ""}
+    <div class="ht-meta">
+      <span class="ht-sum">${num(t.total)} $</span>
+      ${t.payment_status === "оплачено" ? `<span class="ok">оплачено</span>` : Number(t.balance) > 0 && t.payment_status === "частково" ? `<span class="warn">до сплати ${num(t.balance)}</span>` : ""}
+      ${t.approval === "pending" ? `<span title="Кошторис чекає відповіді клієнта">📝 чекає</span>` : t.approval === "approved" ? `<span class="ok" title="Клієнт погодив кошторис">✅ погоджено</span>` : t.approval === "declined" ? `<span class="warn">❌ відмова</span>` : ""}
+    </div>
+    <div class="ht-foot"><span class="${t.assignee && t.assignee === me ? "mine" : ""}">👤 ${esc(t.assignee || "—")}</span>
+      ${t.comments ? `<span>💬${t.comments}</span>` : ""}${t.photos ? `<span>📷${t.photos}</span>` : ""}
+      ${t.next ? `<button class="ht-next" data-home-next="${esc(t.number)}" data-status="${esc(t.next.status)}">${esc(t.next.label)}</button>` : ""}</div>
+  </div>`;
+}
+
+function renderHome(){
+  const d = homeData;
+  if (!d) return;
+  const me = authorName();
+  const mine = t => !homeMine || (me && t.assignee === me);
+  const k = d.kpi;
+  const kpi = (label, value, attr, cls = "") => `<button class="kpi ${cls}" ${attr}><b>${value}</b><span>${label}</span></button>`;
+  const planned = d.bookings_today.filter(b => b.status !== "скасовано");
+  // На телефоні видно одну стадію: обрану або «в роботі», а якщо там порожньо — першу непорожню.
+  const counts = STAGES.map(([st]) => d.board[st].filter(mine).length);
+  const stageIndex = homeStage ?? (counts[1] ? 1 : Math.max(0, counts.findIndex(n => n > 0)));
+  $("#homeBody").innerHTML = `
+    <div class="home-head">
+      <div><h2>${esc(d.weekday[0].toUpperCase() + d.weekday.slice(1))}, ${esc(d.now.split(" ")[0])}</h2>
+        <span class="sub">оновлено о ${esc(d.now.split(" ")[1])} · оновлюється саме</span></div>
+      <label class="mine-toggle" title="${me ? "Показати лише замовлення, де відповідальний — " + esc(me) : "Ім'я вказується в коментарях до замовлення"}">
+        <input type="checkbox" id="homeMine" ${homeMine ? "checked" : ""} ${me ? "" : "disabled"}> Лише мої${me ? ` (${esc(me)})` : ""}</label>
+    </div>
+    ${currentOrder ? `<button class="continue" data-home-open="${esc(currentOrder.number)}">↩ Продовжити № ${esc(currentOrder.number)}${currentOrder.customer.name ? " · " + esc(currentOrder.customer.name) : ""}</button>` : ""}
+    <div class="quick">
+      <button class="primary" data-home-act="new">＋ Нове замовлення</button>
+      <button data-home-act="booking">📅 Записати клієнта</button>
+      <button data-home-act="find">🔎 Знайти замовлення</button>
+      <button data-home-act="work">💬 Робоче місце</button>
+    </div>
+    <div class="kpis">
+      ${kpi("прийнято", k.accepted, 'data-home-jump="stage-0"')}
+      ${kpi("в роботі", k.in_work, 'data-home-jump="stage-1"')}
+      ${kpi("готово до видачі", k.ready, 'data-home-jump="stage-2"', k.ready ? "good" : "")}
+      ${kpi("записів сьогодні", k.bookings_today, 'data-home-jump="home-bookings"')}
+      ${kpi("отримано сьогодні", num(k.cash_today) + " $", 'data-home-act="cash"')}
+      ${kpi("борги клієнтів", num(k.debts) + " $", 'data-home-act="debts"', Number(k.debts) > 0 ? "bad" : "")}
+    </div>
+    ${d.alerts.length ? `<section class="attn ${d.alerts.length > 3 ? "folded" : ""}" id="attn"><h3>⚠ Потребує уваги · ${d.alerts.length}</h3>
+      ${d.alerts.map(a => `<button class="attn-row" ${a.number ? `data-home-open="${esc(a.number)}"` : a.kind === "stock" ? 'data-home-act="stock"' : 'data-home-act="booking"'}>
+        <span>${ALERT_ICON[a.kind] || "•"}</span><span>${esc(a.text)}</span></button>`).join("")}
+      ${d.alerts.length > 3 ? `<button class="attn-more" data-attn-more>Показати всі (${d.alerts.length})</button>` : ""}</section>` : ""}
+    <section id="home-board"><h3>Замовлення в роботі</h3>
+      <div class="stage-tabs">${STAGES.map(([st, title], i) => `<button data-home-stage="${i}" class="${i === stageIndex ? "on" : ""}">${title.split(" ").slice(1).join(" ").replace(" до видачі", "")} <span class="badge">${d.board[st].filter(mine).length}</span></button>`).join("")}</div>
+      <div class="board">${STAGES.map(([st, title], i) => {
+        const items = d.board[st].filter(mine);
+        return `<div class="col ${i === stageIndex ? "sel" : ""}" id="stage-${i}"><div class="col-head">${title} <span class="badge">${items.length}</span></div>
+          ${items.map(homeTile).join("") || `<div class="sub col-empty">${homeMine ? "Ваших немає" : "Порожньо"}</div>`}</div>`;
+      }).join("")}</div></section>
+    <section id="home-bookings"><h3>📅 Записи на сьогодні · ${planned.length}${d.bookings_tomorrow ? ` <span class="sub">· завтра: ${d.bookings_tomorrow}</span>` : ""}</h3>
+      ${d.bookings_today.length ? `<div class="hbook">${d.bookings_today.map(b => {
+        const off = b.status === "скасовано" || b.status === "не приїхав";
+        return `<div class="hb ${off ? "off" : ""}"><div class="t">${esc(b.time)}</div>
+          <div><b>${esc(b.client_name)}</b>${b.car ? ` · ${esc(b.car)}` : ""}${b.work ? `<div class="sub">${esc(b.work)}</div>` : ""}
+            ${b.status !== "заплановано" ? `<span class="badge">${esc(b.status)}${b.order_number ? " → " + esc(b.order_number) : ""}</span>` : ""}</div>
+          ${b.status === "заплановано" ? `<button class="primary" data-home-arrive="${esc(b.id)}">🚗 Приїхав</button>` : b.order_number ? `<button data-home-open="${esc(b.order_number)}">Відкрити</button>` : ""}</div>`;
+      }).join("")}</div>` : `<div class="sub">На сьогодні записів немає. <button data-home-act="booking">Записати клієнта</button></div>`}</section>
+    ${d.drafts.length ? `<section><h3>📝 Незавершені чернетки · ${d.drafts.length}</h3><div class="drafts">${d.drafts.map(x =>
+      `<button data-home-open="${esc(x.number)}"><b>${esc(x.number)}</b><span class="sub">${esc(x.client || "без клієнта")}${x.car ? " · " + esc(x.car) : ""} · ${esc(x.created_at.split(" ")[0])}</span></button>`).join("")}</div></section>` : ""}`;
+  $("#homeMine").onchange = e => {
+    homeMine = e.target.checked;
+    try{ localStorage.setItem("homeMine", homeMine ? "1" : "0"); }catch(err){}
+    renderHome();
+  };
+}
+
+async function openFromHome(number){
+  try{
+    if (!currentOrder || currentOrder.number !== number){
+      const data = await api(`/api/orders/${encodeURIComponent(number)}/open`, {method: "POST"});
+      $("#log").innerHTML = "";
+      addMsg("assistant", `Відкрито замовлення-наряд № ${number}. Що потрібно змінити?`);
+      renderOrder(data.order);
+    }
+    document.querySelector('.tabs button[data-tab="order"]').click();
+  }catch(err){ alert(err.message); }
+}
+
+$("#homeBody").addEventListener("click", async e => {
+  if (e.target.dataset.attnMore !== undefined){ $("#attn").classList.remove("folded"); return; }
+  const el = e.target.closest("[data-home-next],[data-home-arrive],[data-home-act],[data-home-jump],[data-home-stage],[data-home-open]");
+  if (!el) return;
+  const d = el.dataset;
+  if (d.homeNext){
+    e.stopPropagation();
+    const t = Object.values(homeData.board).flat().find(x => x.number === d.homeNext);
+    if (d.status === "видано" && t && Number(t.balance) > 0 &&
+        !confirm(`Клієнт ще не сплатив ${num(t.balance)} $. Видати автомобіль у борг?`)) return;
+    el.disabled = true;
+    try{ await api(`/api/orders/${encodeURIComponent(d.homeNext)}/status`, {method: "POST", body: JSON.stringify({status: d.status, by: authorName()})}); }
+    catch(err){ alert(err.message); }
+    return loadHome();
+  }
+  if (d.homeArrive){
+    try{
+      const data = await api(`/api/bookings/${d.homeArrive}/order`, {method: "POST"});
+      $("#log").innerHTML = "";
+      addMsg("assistant", `Створено замовлення-наряд № ${data.order.number} за записом. Уточніть пробіг${data.order.vehicle.vin ? "" : " і VIN"} — тут або в панелі.`);
+      renderOrder(data.order);
+      document.querySelector('.tabs button[data-tab="order"]').click();
+    }catch(err){ alert(err.message); }
+    return;
+  }
+  if (d.homeStage !== undefined){ homeStage = Number(d.homeStage); renderHome(); return; }
+  if (d.homeJump){
+    const m = d.homeJump.match(/^stage-(\d)$/);
+    if (m && matchMedia("(max-width: 900px)").matches){ homeStage = Number(m[1]); renderHome(); }
+    document.getElementById(m && matchMedia("(max-width: 900px)").matches ? "home-board" : d.homeJump)?.scrollIntoView({behavior: "smooth", block: "start"});
+    return;
+  }
+  if (d.homeOpen) return openFromHome(d.homeOpen);
+  const act = d.homeAct;
+  if (act === "new"){ await newManualOrderFromHome(); return; }
+  if (act === "work") return document.querySelector('.tabs button[data-tab="chat"]').click();
+  if (act === "booking") return showBookings();
+  if (act === "find") return showOrders();
+  if (act === "cash") return showCash("cash");
+  if (act === "debts") return showCash("debts");
+  if (act === "stock"){ $("#catalogDlg").showModal(); try{ setCatalog(await api("/api/catalog")); showCatalog("stock"); }catch(err){ $("#catalogList").textContent = err.message; } }
+});
+
+async function newManualOrderFromHome(){
+  // «Нове» з головної — як кнопка «＋ Нове»: чистий діалог; далі — помічником або вручну.
+  if (busy) return;
+  await api("/api/reset", {method: "POST"});
+  remember(null);
+  $("#log").innerHTML = ""; greet(); renderOrder(null);
+  document.querySelector('.tabs button[data-tab="chat"]').click();
+  $("#input").focus();
+}
+
+$("#btnHome").onclick = () => document.querySelector('.tabs button[data-tab="home"]').click();
+$("#brand").style.cursor = "pointer";
+$("#brand").onclick = () => $("#btnHome").click();
+// Головна оновлюється сама, поки відкрита (зручно й на телефоні, й на екрані в майстерні).
+setInterval(() => { if (!document.hidden) loadHome(); }, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) loadHome(); });
+
 // ---------- Меню на телефоні ----------
 function toggleMenu(open){
   const panel = $("#menuPanel");
@@ -2177,10 +2414,18 @@ $("#btnNew").onclick = async () => {
   await api("/api/reset", {method: "POST"});
   remember(null);
   $("#log").innerHTML = ""; greet(); renderOrder(null);
+  document.querySelector('.tabs button[data-tab="chat"]').click();
 };
 document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
   document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  const home = b.dataset.tab === "home";
+  const wasHome = document.body.classList.contains("home-mode");
+  document.body.classList.toggle("home-mode", home);
+  $("#btnHome").classList.toggle("on", home);
+  if (home){ loadHome(); return; }
   document.querySelectorAll("main > .card").forEach(c => c.classList.toggle("show", c.id === b.dataset.tab));
+  // Повертаємось із головної — статус замовлення могли змінити там.
+  if (wasHome && currentOrder) api("/api/state").then(st => { if (st.order) renderOrder(st.order); }).catch(() => {});
 });
 
 (async () => {
@@ -2210,6 +2455,7 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
     if (!s.history.length) greet();
     renderOrder(s.order);
   }catch(e){ greet(); renderOrder(null); addMsg("error", e.message); }
+  finally{ document.querySelector('.tabs button[data-tab="home"]').click(); }  // стартова сторінка — головна
 })();
 </script>
 </body>

@@ -45,12 +45,13 @@ from .photos import KINDS as PHOTO_KINDS
 from .photos import PhotoError as GalleryError
 from .photos import PhotoStore
 from .stock import Stock, StockError
+from .render import fmt as fmt_money
 from .render import PdfUnavailable, pdf_filename, render_html, render_pdf
 from .tools import OrderSession
 from .usage import UsageLedger
 from .usage import add as add_usage
 from .usage import empty as empty_usage
-from .telegram import ClientNotConnected, TelegramError
+from .telegram import ACTIVE, NEXT_STATUS, STALE_DAYS, ClientNotConnected, TelegramError
 from .telegram import from_env as telegram_from_env
 from .vision import PhotoError, parse_data_url, recognize
 
@@ -1327,6 +1328,110 @@ def create_app(
         return Response(export_to_order(rows),
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f"attachment; filename*=UTF-8''zamovyty-{time.strftime('%Y-%m-%d')}.xlsx"})
+
+    # --- головна сторінка ---
+
+    def since_status(o) -> str:
+        return next((e["at"] for e in reversed(o.status_log) if e.get("status") == o.status), o.created_at)
+
+    def days_since(value: str, now: datetime.datetime) -> float | None:
+        try:
+            return (now - datetime.datetime.strptime(value, "%d.%m.%Y %H:%M")).total_seconds() / 86400
+        except ValueError:
+            return None
+
+    def tile(o, now) -> dict:
+        since = since_status(o)
+        days = days_since(since, now)
+        approval = bot.approval(o.number) if bot else None
+        nxt = NEXT_STATUS.get(o.status)
+        return {
+            "number": o.number, "status": o.status, "since": since, "days": round(days, 1) if days is not None else None,
+            "stale": o.status == "в роботі" and days is not None and days >= STALE_DAYS,
+            "client": o.customer.name, "phone": o.customer.phone,
+            "car": " ".join(x for x in (o.vehicle.model and f"Tesla {o.vehicle.model}", o.vehicle.plate) if x),
+            "works": [line.name for line in o.labor][:3], "more_works": max(0, len(o.labor) - 3),
+            "total": str(o.totals()["total"]), "balance": str(o.balance()), "payment_status": o.payment_status(),
+            "assignee": o.assignee, "comments": comments.count(o.number), "photos": len(photos.list(o.number)),
+            "approval": approval["status"] if approval else "", "next": {"status": nxt[0], "label": nxt[1]} if nxt else None,
+            "missing": o.missing_fields(),
+        }
+
+    @app.get("/api/dashboard")
+    def dashboard():
+        now = datetime.datetime.now()
+        today = now.date()
+        orders = store.list()
+        board = {s: [] for s in ACTIVE}
+        for o in orders:
+            if o.status in board:
+                board[o.status].append(tile(o, now))
+        for items in board.values():  # спершу ті, що чекають найдовше
+            items.sort(key=lambda t: -(t["days"] or 0))
+        drafts = sorted((o for o in orders if o.status == DRAFT), key=lambda o: o.number, reverse=True)[:8]
+        todays = bookings.list(today.isoformat(), today.isoformat(), include_cancelled=True)
+        tomorrow = (today + datetime.timedelta(days=1)).isoformat()
+        day = today.strftime("%d.%m.%Y")
+        cash_today = sum((Decimal(p["amount"]) for o in orders for p in o.payments if p["at"].startswith(day)), Decimal("0"))
+        debts, _ = debts_list()
+        low = [catalog.parts[p].name for p in catalog.parts if stock.is_low(p)]
+
+        alerts = []
+        for t in board["в роботі"]:
+            if t["stale"]:
+                alerts.append({"kind": "stale", "number": t["number"],
+                               "text": f"{t['number']} — у роботі вже {int(t['days'])} дн. ({t['car'] or t['client'] or '—'})"})
+        if bot:
+            for number, a in bot.links["approvals"].items():
+                waited = days_since(a.get("sent_at", ""), now)
+                if a.get("status") == "pending" and waited is not None and waited >= 1:
+                    alerts.append({"kind": "approval", "number": number,
+                                   "text": f"{number} — клієнт не відповів на кошторис {int(waited)} дн."})
+        for t in board["готово"]:
+            if t["days"] is not None and t["days"] >= 2:
+                alerts.append({"kind": "pickup", "number": t["number"],
+                               "text": f"{t['number']} — готово {int(t['days'])} дн., клієнт не забрав ({t['client'] or '—'})"})
+        for d in debts[:5]:
+            alerts.append({"kind": "debt", "number": d["number"],
+                           "text": f"{d['number']} — борг {fmt_money(d['balance'])} $ ({d['client'] or '—'})"})
+        if low:
+            alerts.append({"kind": "stock", "number": "",
+                           "text": f"На складі закінчується: {', '.join(low[:4])}{' і ще ' + str(len(low) - 4) if len(low) > 4 else ''}"})
+        late = [b for b in todays if b["status"] == bk.PLANNED and b["time"] < now.strftime("%H:%M")]
+        for b in late:
+            alerts.append({"kind": "late", "number": "", "booking": b["id"],
+                           "text": f"Запис на {b['time']} — {b['client_name']} ще не позначено «приїхав»"})
+
+        return {
+            "now": now.strftime("%d.%m.%Y %H:%M"), "weekday": bk.WEEKDAYS[today.weekday()],
+            "kpi": {"accepted": len(board["прийнято"]), "in_work": len(board["в роботі"]), "ready": len(board["готово"]),
+                    "bookings_today": sum(1 for b in todays if b["status"] != bk.CANCELLED),
+                    "cash_today": str(money(cash_today)),
+                    "debts": str(money(sum((Decimal(d["balance"]) for d in debts), Decimal("0")))), "low_stock": len(low)},
+            "board": board, "alerts": alerts,
+            "bookings_today": [booking_view(b) for b in todays],
+            "bookings_tomorrow": len(bookings.list(tomorrow, tomorrow)),
+            "drafts": [{"number": o.number, "created_at": o.created_at, "client": o.customer.name,
+                        "car": " ".join(x for x in (o.vehicle.model, o.vehicle.plate) if x)} for o in drafts],
+        }
+
+    @app.post("/api/orders/{number}/status")
+    def saved_order_status(number: str, body: StatusIn):
+        """Змінити статус збереженого замовлення з головної сторінки (без відкриття)."""
+        try:
+            order = store.load(number)
+        except FileNotFoundError:
+            raise HTTPException(404, "Замовлення-наряд не знайдено") from None
+        try:
+            order.set_status(body.status, by=body.by.strip()[:80])
+        except StatusError as exc:
+            raise HTTPException(400, str(exc)) from None
+        try:
+            store.save(order)
+        except (OSError, FileNotFoundError):
+            raise HTTPException(500, "Не вдалося зберегти замовлення-наряд") from None
+        sync_open_orders(order)
+        return {"status": order.status, "balance": str(order.balance())}
 
     # --- фото до замовлення ---
 
