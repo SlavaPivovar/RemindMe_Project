@@ -211,3 +211,33 @@ def export_to_order(rows: list[dict]) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def export_purchase(po: dict, service: dict) -> bytes:
+    """Замовлення постачальнику — щоб надіслати файлом."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Замовлення"
+    ws.append([f"Замовлення {po['number']} від {po['created_at'].split(' ')[0]}"])
+    ws["A1"].font = Font(bold=True, size=13)
+    ws.append([f"Замовник: {service.get('name', '')}" + (f", {service['address']}" if service.get("address") else "")])
+    if po.get("supplier"):
+        ws.append([f"Постачальник: {po['supplier']}"])
+    ws.append([])
+    ws.append(["Артикул", "Назва", "Кількість", "Одиниця", "Ціна, $", "Сума, $"])
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="E8EEF5")
+    for x in po["lines"]:
+        ws.append([x["part_no"], x["name"], x["qty"], x.get("unit", "шт"), x["cost"] or None,
+                   round(x["qty"] * x["cost"], 2) if x["cost"] else None])
+    ws.append(["", "Разом", "", "", "", float(po["total"])])
+    ws[ws.max_row][5].font = Font(bold=True)
+    if po.get("note"):
+        ws.append([])
+        ws.append([f"Примітка: {po['note']}"])
+    for col, width in zip("ABCDEF", (18, 50, 11, 10, 11, 12)):
+        ws.column_dimensions[col].width = width
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

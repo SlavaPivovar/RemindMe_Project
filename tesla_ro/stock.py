@@ -79,11 +79,18 @@ class Stock:
         with self.moves_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(move, ensure_ascii=False) + "\n")
 
-    def _apply(self, part_no: str, delta: float, kind: str, by: str = "", note: str = "", order: str = "") -> dict:
+    def _apply(self, part_no: str, delta: float, kind: str, by: str = "", note: str = "", order: str = "",
+               cost: float | None = None) -> dict:
         item = self._data["items"].setdefault(part_no, {"qty": 0, "min": 0})
+        if cost is not None and delta > 0:
+            # Середня собівартість: старий залишок за старою ціною + новий прихід за новою.
+            old_qty, old_cost = max(item["qty"], 0), item.get("cost")
+            item["cost"] = round(cost if not old_cost or not old_qty else
+                                 (old_qty * old_cost + delta * cost) / (old_qty + delta), 4)
         item["qty"] = _q(item["qty"] + delta)
         move = {"at": now_str(), "part_no": part_no, "qty": _q(delta), "after": item["qty"], "kind": kind,
-                "by": by[:80], "note": note[:200], "order": order}
+                "by": by[:80], "note": note[:200], "order": order,
+                **({"cost": cost} if cost is not None else {"cost": item["cost"]} if item.get("cost") and delta < 0 else {})}
         self._log(move)
         return move
 
@@ -91,6 +98,10 @@ class Stock:
 
     def qty(self, part_no: str) -> float:
         return self._data["items"].get(part_no, {}).get("qty", 0)
+
+    def cost(self, part_no: str) -> float | None:
+        """Середня закупівельна ціна (собівартість) або None, якщо закупівель із ціною ще не було."""
+        return self._data["items"].get(part_no, {}).get("cost")
 
     def min(self, part_no: str) -> float:
         return self._data["items"].get(part_no, {}).get("min", 0)
@@ -113,10 +124,11 @@ class Stock:
 
     # --- операції ---
 
-    def receive(self, part_no: str, qty, by: str = "", note: str = "") -> dict:
+    def receive(self, part_no: str, qty, by: str = "", note: str = "", cost=None) -> dict:
         amount = _number(qty, "Кількість", allow_zero=False)
+        price = _number(cost, "Ціна закупівлі") if cost not in (None, "") else None
         with self._lock:
-            move = self._apply(part_no, amount, RECEIPT, by, note)
+            move = self._apply(part_no, amount, RECEIPT, by, note, cost=price)
             self._save()
         return move
 

@@ -250,6 +250,11 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 .defer-btn{display:block;margin-top:6px;font-size:13px}
 .link-row{display:flex;gap:6px;margin-top:6px}
 .link-row input{flex:1;min-width:0;font:inherit;font-size:13px;padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.totals .margin{color:var(--muted);font-size:13px}
+.totals .margin small{color:var(--warn)}
+#poLines input{width:100%;min-width:60px;font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+#poLines td:first-child{min-width:150px}
+.po-total{margin:10px 0;text-align:right}
 .tg{font-size:12px;white-space:nowrap;color:var(--ok)}
 .tg.off{color:var(--muted)}
 tr.click{cursor:pointer}
@@ -497,7 +502,7 @@ details.fold[open]>summary::before{content:"▾ "}
   <div class="dh"><h2>Довідник</h2><button id="closeCatalog">✕</button></div>
   <div class="db">
     <div class="seg" id="catTabs">
-      <button data-view="ops" class="on">Роботи</button><button data-view="parts">Запчастини</button><button data-view="stock">Склад</button><button data-view="settings">Налаштування</button>
+      <button data-view="ops" class="on">Роботи</button><button data-view="parts">Запчастини</button><button data-view="stock">Склад</button><button data-view="purchases">Закупівлі</button><button data-view="settings">Налаштування</button>
     </div>
     <div id="catalogList">Завантаження…</div>
   </div>
@@ -992,6 +997,8 @@ function renderOrder(o){
       <div><span>Запчастини</span><span>${num(t.parts)} ${cur}</span></div>
       ${Number(o.vat_percent) ? `<div><span>${vat}</span><span>${num(t.vat)} ${cur}</span></div>` : ""}
       <div class="grand"><span>Разом</span><span>${num(t.total)} ${cur}</span></div>
+      ${o.margin && (o.margin.amount != null || o.margin.unknown) ? `<div class="margin" title="Внутрішнє: продаж запчастин мінус середня закупівельна ціна. Клієнт цього не бачить.">
+        <span>Маржа на запчастинах</span><span>${o.margin.amount != null ? `${num(o.margin.amount)} ${cur}${o.margin.percent != null ? ` · ${o.margin.percent}%` : ""}` : "—"}${o.margin.unknown ? `<small> · без собівартості: ${o.margin.unknown}</small>` : ""}</span></div>` : ""}
       ${o.uah ? `<div class="uah"><span>≈ у гривні</span><span>${num(o.uah.amount)} грн</span></div>
         <div class="uah-rate">${esc(o.uah.source)} ${esc(String(o.uah.rate).replace(".", ","))} на ${esc(o.uah.date)}</div>` : ""}
     </div>
@@ -2145,9 +2152,111 @@ function showCatalog(view){
     renderPartsTable();
   } else if (catView === "stock"){
     loadStock(flash);
+  } else if (catView === "purchases"){
+    loadPurchases(flash);
   } else {
     renderSettingsForm(flash);
   }
+}
+
+// ---------- Закупівлі ----------
+let poData = null;
+async function loadPurchases(flash = ""){
+  $("#catalogList").innerHTML = `${flash}<div class="toolbar"><span class="sub" style="flex:1">Замовлення постачальникам. Під час приймання товар іде на склад разом із ціною закупівлі.</span>
+      <button data-po-from-low>＋ З того, що треба замовити</button><button class="primary" data-po-new>＋ Нове замовлення</button></div>
+    <div id="poTable">Завантаження…</div>`;
+  try{ poData = await api("/api/purchases"); renderPurchases(); }
+  catch(e){ $("#poTable").textContent = e.message; }
+}
+function renderPurchases(){
+  const st = {"чернетка": "", "замовлено": "st-2", "отримано частково": "st-1", "отримано": "st-3", "скасовано": "st-5"};
+  $("#poTable").innerHTML = poData.purchases.length ? `<div class="tbl"><table>
+    <tr><th>Замовлення</th><th class="hide-m">Постачальник</th><th class="r">Сума</th><th>Статус</th><th></th></tr>
+    ${poData.purchases.map(p => `<tr><td><b>${esc(p.number)}</b><div class="sub">${esc(p.created_at.split(" ")[0])} · позицій: ${p.lines.length}<span class="show-m"> · ${esc(p.supplier || "—")}</span></div></td>
+      <td class="hide-m">${dash(p.supplier)}</td><td class="r">${num(p.total)} $</td>
+      <td><span class="badge ${st[p.status] || ""}">${esc(p.status)}</span></td>
+      <td class="r acts"><button data-po-open="${esc(p.id)}" title="Відкрити">✎</button></td></tr>`).join("")}</table></div>`
+    : `<div class="empty">Замовлень постачальникам ще немає.</div>`;
+}
+async function poDialog(po, prefill){
+  if (!catalogData) setCatalog(await api("/api/catalog"));
+  if (!poData) poData = await api("/api/purchases");
+  const parts = catalogData.parts;
+  const editable = !po || ["чернетка", "замовлено"].includes(po.status);
+  const lines = po ? po.lines : prefill || [];
+  const receiving = po && ["замовлено", "отримано частково"].includes(po.status);
+  $("#lineTitle").textContent = po ? `${po.number} · ${po.status}` : "Нове замовлення постачальнику";
+  const row = x => `<tr class="po-line"><td><input list="poParts" class="po-part" value="${esc(x ? x.part_no : "")}" placeholder="артикул або назва" ${editable ? "" : "disabled"}>
+      <div class="sub po-name">${esc(x ? x.name : "")}</div></td>
+    <td><input class="po-qty" inputmode="decimal" value="${x ? String(x.qty).replace(".", ",") : "1"}" ${editable ? "" : "disabled"}></td>
+    <td><input class="po-cost" inputmode="decimal" value="${x && x.cost ? String(x.cost).replace(".", ",") : ""}" placeholder="$" ${editable ? "" : "disabled"}></td>
+    ${receiving ? `<td><input class="po-got" inputmode="decimal" value="${String(Math.max(0, x.qty - x.received)).replace(".", ",")}" title="Скільки отримано зараз"><div class="sub">було: ${String(x.received).replace(".", ",")}</div></td>` : po && po.status !== "чернетка" ? `<td class="r">${String(x.received).replace(".", ",")}</td>` : ""}
+    <td>${editable ? `<button type="button" class="po-del" title="Прибрати">✕</button>` : ""}</td></tr>`;
+  $("#lineBody").innerHTML = `<form class="form" id="poForm" autocomplete="off">
+      <label for="poSupplier">Постачальник</label><input id="poSupplier" list="poSuppliers" value="${esc(po ? po.supplier : "")}" ${editable ? "" : "disabled"}>
+      <datalist id="poSuppliers">${poData.suppliers.map(x => `<option value="${esc(x)}">`).join("")}</datalist>
+      <label for="poNote">Примітка</label><input id="poNote" value="${esc(po ? po.note : "")}" ${editable ? "" : "disabled"}>
+    </form>
+    <datalist id="poParts">${parts.map(p => `<option value="${esc(p.part_no)}">${esc(p.name)}</option>`).join("")}</datalist>
+    <div class="tbl"><table id="poLines"><tr><th>Запчастина</th><th>К-сть</th><th>Ціна, $</th>${receiving ? "<th>Отримано</th>" : po && po.status !== "чернетка" ? `<th class="r">Отримано</th>` : ""}<th></th></tr>
+      ${lines.map(row).join("")}</table></div>
+    ${editable ? `<button type="button" id="poAdd">＋ Рядок</button>` : ""}
+    <div class="po-total">Разом: <b id="poSum">—</b></div>
+    <div class="form-err" id="lineErr" hidden></div>
+    <div class="form-actions" style="flex-wrap:wrap">
+      ${editable ? `<button class="primary" id="poSave">Зберегти</button>` : ""}
+      ${po && po.status === "чернетка" ? `<button id="poOrdered">📨 Позначити «замовлено»</button>` : ""}
+      ${receiving ? `<button class="primary" id="poReceive">📦 Прийняти на склад</button>` : ""}
+      ${po ? `<button data-download="/api/purchases/${esc(po.id)}/export.xlsx" id="poXlsx">⬇ Excel для постачальника</button>` : ""}
+      ${po && ["чернетка", "замовлено"].includes(po.status) ? `<button class="danger" id="poCancel">Скасувати замовлення</button>` : ""}
+    </div>`;
+  $("#lineDlg").showModal();
+  const nameOf = no => (parts.find(p => p.part_no === no.trim().toUpperCase()) || {}).name || "";
+  const collect = () => [...document.querySelectorAll("#poLines .po-line")].map(tr => ({
+    part_no: tr.querySelector(".po-part").value.trim().toUpperCase(), qty: tr.querySelector(".po-qty").value.replace(",", "."),
+    cost: tr.querySelector(".po-cost").value.replace(",", ".") || 0,
+    got: tr.querySelector(".po-got") ? tr.querySelector(".po-got").value.replace(",", ".") : null})).filter(x => x.part_no);
+  const recount = () => { const t = collect().reduce((s, x) => s + (Number(x.qty) || 0) * (Number(x.cost) || 0), 0); $("#poSum").textContent = num(t) + " $"; };
+  const err = m => { $("#lineErr").hidden = false; $("#lineErr").textContent = m; };
+  const body = extra => ({supplier: $("#poSupplier").value, note: $("#poNote").value, lines: collect(), by: authorName(), ...extra});
+  const done = async (r, msg) => { $("#lineDlg").close(); poData = r; catFlash = msg; showCatalog("purchases"); };
+  $("#poLines").addEventListener("input", e => {
+    if (e.target.classList.contains("po-part")) e.target.parentNode.querySelector(".po-name").textContent = nameOf(e.target.value);
+    recount();
+  });
+  $("#poLines").addEventListener("click", e => { if (e.target.classList.contains("po-del")){ e.target.closest("tr").remove(); recount(); } });
+  if ($("#poAdd")) $("#poAdd").onclick = () => { $("#poLines").insertAdjacentHTML("beforeend", row(null)); recount(); };
+  if ($("#poSave")) $("#poSave").onclick = async () => {
+    try{ await done(await api(po ? `/api/purchases/${po.id}` : "/api/purchases", {method: po ? "PUT" : "POST", body: JSON.stringify(body())}), "Збережено"); }
+    catch(e){ err(e.message); }
+  };
+  if ($("#poOrdered")) $("#poOrdered").onclick = async () => {
+    try{ await done(await api(`/api/purchases/${po.id}`, {method: "PUT", body: JSON.stringify(body({status: "замовлено"}))}), `${po.number}: замовлено`); }
+    catch(e){ err(e.message); }
+  };
+  if ($("#poCancel")) $("#poCancel").onclick = async () => {
+    if (!confirm(`Скасувати ${po.number}?`)) return;
+    try{ await done(await api(`/api/purchases/${po.id}`, {method: "PUT", body: JSON.stringify({status: "скасовано"})}), `${po.number}: скасовано`); }
+    catch(e){ err(e.message); }
+  };
+  if ($("#poReceive")) $("#poReceive").onclick = async () => {
+    const got = collect().filter(x => Number(x.got) > 0).map(x => ({part_no: x.part_no, qty: x.got, cost: x.cost}));
+    if (!got.length) return err("Вкажіть, скільки отримано");
+    if (!confirm(`Прийняти на склад ${got.length} поз.?`)) return;
+    try{ await done(await api(`/api/purchases/${po.id}/receive`, {method: "POST", body: JSON.stringify({lines: got, by: authorName()})}), `${po.number}: прийнято на склад`); }
+    catch(e){ err(e.message); }
+  };
+  if ($("#poXlsx")) $("#poXlsx").onclick = () => { location.href = `/api/purchases/${po.id}/export.xlsx`; };
+  recount();
+}
+async function poFromLow(){
+  try{
+    const st = await api("/api/stock");
+    const low = st.items.filter(i => i.low || i.free < 0).map(i => ({part_no: i.part_no, name: i.name, received: 0,
+      qty: Math.max(i.min * 2 - i.free, i.min - i.free, -i.free, 1), cost: i.cost || 0}));
+    if (!low.length){ alert("Усього вистачає — замовляти нічого. Мінімальні залишки задаються на вкладці «Склад» (⚖)."); return; }
+    poDialog(null, low);
+  }catch(e){ alert(e.message); }
 }
 
 // ---------- Склад ----------
@@ -2155,7 +2264,8 @@ let stockData = null, stockQuery = "", stockLowOnly = false;
 async function loadStock(flash = ""){
   $("#catalogList").innerHTML = `${flash}<div class="toolbar">
       <input id="stockQuery" type="search" placeholder="Пошук запчастини або артикулу" value="${esc(stockQuery)}">
-      <button data-download="/api/stock/to-order.xlsx">⬇ Що замовити (Excel)</button></div>
+      <button data-download="/api/stock/to-order.xlsx">⬇ Що замовити (Excel)</button>
+      <button class="primary" data-po-from-low>＋ Замовити постачальнику</button></div>
     <div class="filter-chips"><button data-stock-filter="0" class="${stockLowOnly ? "" : "on"}">усі</button><button data-stock-filter="1" class="${stockLowOnly ? "on" : ""}">⚠ треба замовити</button></div>
     <div class="sub" style="margin:6px 0">Запчастини з довідника списуються автоматично, коли замовлення-наряд отримує статус «видано».
       «Резерв» — уже вписані в замовлення, які ще не видано. Мінімум 0 — без нагадувань.</div>
@@ -2170,10 +2280,11 @@ function renderStockTable(){
   const items = stockData.items.filter(i => (!stockLowOnly || i.low || i.free < 0) && (!q || `${i.part_no} ${i.name}`.toLowerCase().includes(q)));
   const n = v => String(v).replace(".", ",");
   $("#stockTable").innerHTML = items.length ? `<div class="tbl"><table>
-    <tr><th>Запчастина</th><th class="r">Залишок</th><th class="r hide-m">Резерв</th><th class="r hide-m">Мін.</th><th></th></tr>
+    <tr><th>Запчастина</th><th class="r">Залишок</th><th class="r hide-m">Резерв</th><th class="r hide-m">Мін.</th><th class="r hide-m" title="Середня закупівельна ціна · націнка до ціни продажу">Собівартість</th><th></th></tr>
     ${items.map(i => `<tr><td>${esc(i.name)}<div class="sub">${esc(i.part_no)}${i.reserved ? `<span class="show-m"> · резерв ${n(i.reserved)}</span>` : ""}</div></td>
       <td class="r"><b class="${i.low || i.free < 0 ? "stock-low" : ""}">${n(i.qty)}</b> ${esc(i.unit)}${i.free < 0 ? `<div class="sub stock-low">бракує ${n(-i.free)}</div>` : i.low ? `<div class="sub stock-low">замовити</div>` : ""}</td>
       <td class="r hide-m">${i.reserved ? n(i.reserved) : "—"}</td><td class="r hide-m">${i.min ? n(i.min) : "—"}</td>
+      <td class="r hide-m">${i.cost != null ? `${num(i.cost)} $<div class="sub">${i.markup != null ? (i.markup > 0 ? "+" : "") + i.markup + "%" : ""}</div>` : "—"}</td>
       <td class="r acts"><button data-stock-in="${esc(i.part_no)}" title="Прихід">＋</button> <button data-stock-adj="${esc(i.part_no)}" title="Інвентаризація, мінімум, історія">⚖</button></td></tr>`).join("")}
     </table></div>` : `<div class="empty">${stockLowOnly ? "Усього вистачає — замовляти нічого." : "Нічого не знайдено."}</div>`;
 }
@@ -2184,6 +2295,8 @@ async function stockDialog(partNo, mode){
   $("#lineBody").innerHTML = `<form class="form" id="stockForm" autocomplete="off">
       <label>Залишок</label><div><b>${String(i.qty).replace(".", ",")} ${esc(i.unit)}</b>${i.reserved ? ` · у резерві ${String(i.reserved).replace(".", ",")}` : ""}</div>
       ${mode === "in" ? `<label for="sQty">Надійшло, ${esc(i.unit)}</label><input id="sQty" inputmode="decimal" required>
+        <label for="sCost">Ціна закупівлі, $ за од.</label><div><input id="sCost" inputmode="decimal" placeholder="необов'язково" value="${i.cost != null ? String(i.cost).replace(".", ",") : ""}">
+          <div class="hint">З неї рахується собівартість і маржа на запчастинах. Ціна продажу: ${num(i.price)} $.</div></div>
         <label for="sNote">Постачальник / примітка</label><input id="sNote" placeholder="напр., накладна № 123">`
       : `<label for="sQty">Фактично на складі</label><div><input id="sQty" inputmode="decimal" value="${String(i.qty).replace(".", ",")}">
           <div class="hint">Після перерахунку: різниця запишеться як «інвентаризація».</div></div>
@@ -2206,7 +2319,7 @@ async function stockDialog(partNo, mode){
   }
   $("#stockForm").onsubmit = async e => {
     e.preventDefault();
-    const body = {qty: $("#sQty").value, note: $("#sNote").value, by: authorName()};
+    const body = {qty: $("#sQty").value, note: $("#sNote").value, by: authorName(), cost: $("#sCost") ? $("#sCost").value.replace(",", ".") : ""};
     const url = `/api/stock/${encodeURIComponent(partNo)}`;
     try{
       if (mode === "in") await api(url + "/receive", {method: "POST", body: JSON.stringify(body)});
@@ -2477,6 +2590,9 @@ $("#catalogList").addEventListener("click", e => {
   if (d.editPart) return partForm(d.editPart);
   if (d.stockFilter !== undefined){ stockLowOnly = d.stockFilter === "1"; document.querySelectorAll("[data-stock-filter]").forEach(b => b.classList.toggle("on", b === e.target)); return renderStockTable(); }
   if (d.stockIn) return stockDialog(d.stockIn, "in");
+  if (d.poNew !== undefined) return poDialog(null, null);
+  if (d.poFromLow !== undefined) return poFromLow();
+  if (d.poOpen) return poDialog(poData.purchases.find(p => p.id === d.poOpen));
   if (d.stockAdj) return stockDialog(d.stockAdj, "adj");
   if (!d.add) return;
   const op = catalogData.operations.find(o => o.code === d.add);

@@ -42,12 +42,13 @@ from .catalog import DEFAULT_CATALOG, MODEL_CODES, Catalog, CatalogError
 from .clients import build_clients, months_since, personalize
 from .clients import phone_key as bk_phone_key
 from .comments import CommentError, CommentStore
-from .excel import ExcelError, export_catalog, export_clients, export_to_order, import_catalog
+from .excel import ExcelError, export_catalog, export_clients, export_purchase, export_to_order, import_catalog
 from .order import (CANCELLED, DRAFT, PAYMENT_METHODS, STATUSES, OrderStore, PaymentError, StatusError, money,
                     now_str)
 from .photos import KINDS as PHOTO_KINDS
 from .photos import PhotoError as GalleryError
 from .photos import PhotoStore
+from .purchases import PurchaseError, PurchaseStore
 from .stock import Stock, StockError
 from .render import fmt as fmt_money
 from .render import PdfUnavailable, pdf_filename, render_html, render_pdf
@@ -118,6 +119,7 @@ class StockIn(BaseModel):
     qty: str
     note: str = ""
     by: str = ""
+    cost: str = ""  # ціна закупівлі за одиницю (для приходу) — з неї рахується собівартість
 
 
 class ClientApproveIn(BaseModel):
@@ -248,6 +250,7 @@ def create_app(
     bookings_path: str | Path | None = None,
     stock_path: str | Path | None = None,
     fx_path: str | Path | None = None,
+    purchases_path: str | Path | None = None,
     fx_fetch=None,
 ) -> FastAPI:
     """password — пароль для входу; без нього вхід не потрібен (лише для локального запуску).
@@ -263,6 +266,7 @@ def create_app(
     photos = PhotoStore(orders_dir)
     approvals = ApprovalStore(orders_dir)
     stock = Stock(stock_path)
+    purchases = PurchaseStore(purchases_path)
     rates = fx_mod.Rates(fx_path, fetch=fx_fetch)
 
     def fx_rate() -> dict | None:
@@ -921,7 +925,7 @@ def create_app(
         return {**preview, "catalog": catalog_view() if apply else None}
 
     def backup(max_bytes: int | None = None):
-        extra = [p for p in (catalog.path, ledger.path, bookings.path, stock.path, stock.moves_path,
+        extra = [p for p in (catalog.path, ledger.path, bookings.path, stock.path, stock.moves_path, purchases.path,
                              bot.links_path if bot else None) if p]
         data, info = make_backup(Path(orders_dir), extra, max_bytes)
         return data, info, backup_filename(catalog.service.get("name", ""))
@@ -1376,8 +1380,10 @@ def create_app(
         p = catalog.parts[part_no]
         qty, minimum = stock.qty(part_no), stock.min(part_no)
         res = round((booked or {}).get(part_no, 0), 3)
+        cost = stock.cost(part_no)
         return {"part_no": part_no, "name": p.name, "unit": p.unit, "price": p.price, "qty": qty, "min": minimum,
-                "reserved": res, "free": round(qty - res, 3), "low": stock.is_low(part_no)}
+                "reserved": res, "free": round(qty - res, 3), "low": stock.is_low(part_no), "cost": cost,
+                "markup": round((p.price / cost - 1) * 100) if cost else None}
 
     @app.get("/api/stock")
     def stock_view():
@@ -1397,7 +1403,7 @@ def create_app(
 
     @app.post("/api/stock/{part_no}/receive")
     def stock_receive(part_no: str, body: StockIn):
-        return stock_edit(part_no, lambda: stock.receive(part_no, body.qty, body.by, body.note))
+        return stock_edit(part_no, lambda: stock.receive(part_no, body.qty, body.by, body.note, body.cost or None))
 
     @app.post("/api/stock/{part_no}/adjust")
     def stock_adjust(part_no: str, body: StockIn):
@@ -1596,14 +1602,75 @@ def create_app(
                 pass
         return {"status": rec["status"]}
 
+    # --- закупівлі ---
+
+    def po_edit(action):
+        try:
+            return {"purchase": action(), "purchases": purchases.list(), "suppliers": purchases.suppliers()}
+        except PurchaseError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except KeyError:
+            raise HTTPException(404, "Замовлення постачальнику не знайдено") from None
+
+    @app.get("/api/purchases")
+    def purchases_list():
+        return {"purchases": purchases.list(), "suppliers": purchases.suppliers()}
+
+    @app.post("/api/purchases")
+    def purchase_create(body: dict):
+        return po_edit(lambda: purchases.create(body, catalog.parts, by=str(body.get("by") or "")))
+
+    @app.put("/api/purchases/{po_id}")
+    def purchase_update(po_id: str, body: dict):
+        return po_edit(lambda: purchases.update(po_id, body, catalog.parts))
+
+    @app.post("/api/purchases/{po_id}/receive")
+    def purchase_receive(po_id: str, body: dict):
+        def action():
+            po, got = purchases.receive(po_id, body.get("lines") or [])
+            label = f"{po['number']}" + (f", {po['supplier']}" if po["supplier"] else "")
+            for x in got:
+                if x["part_no"] in catalog.parts:
+                    stock.receive(x["part_no"], x["qty"], str(body.get("by") or ""), label, x["cost"] or None)
+            return po
+        return po_edit(action)
+
+    @app.get("/api/purchases/{po_id}/export.xlsx")
+    def purchase_export(po_id: str):
+        try:
+            po = purchases.get(po_id)
+        except KeyError:
+            raise HTTPException(404, "Замовлення постачальнику не знайдено") from None
+        return Response(export_purchase(po, catalog.service),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(po['number'])}.xlsx"})
+
     # --- фото до замовлення ---
+
+    def parts_margin(order) -> dict | None:
+        """Маржа на запчастинах: продаж мінус середня собівартість (внутрішнє, клієнт не бачить)."""
+        if not order.parts:
+            return None
+        sale = cost = Decimal("0")
+        unknown = 0
+        for line in order.parts:
+            c = stock.cost(line.part_no) if line.part_no in catalog.parts else None
+            if c is None:
+                unknown += 1
+                continue
+            sale += line.total
+            cost += Decimal(str(c)) * Decimal(str(line.qty))
+        if sale == 0 and unknown:
+            return {"amount": None, "percent": None, "unknown": unknown}
+        profit = money(sale - cost)
+        return {"amount": str(profit), "percent": round(float(profit / sale * 100)) if sale else None, "unknown": unknown}
 
     def extras(order) -> dict:
         number = order.number
         parts = {line.part_no for line in order.parts if line.part_no in catalog.parts}
         rate = fx_rate()
         return {"photos": photos.list(number), "approval": approvals.get(number),
-                "stock": {p: stock.qty(p) for p in parts},
+                "stock": {p: stock.qty(p) for p in parts}, "margin": parts_margin(order),
                 "uah": {**fx_mod.describe(rate, order.totals()["total"]), "balance": str(fx_mod.uah(order.balance(), rate["rate"]))}
                 if rate else None}
 
@@ -1709,6 +1776,7 @@ def main(argv: list[str] | None = None) -> int:
                      password=password, secure_cookies=secure, secret=load_secret(data_dir),
                      usage_path=data_dir / "usage.jsonl", bookings_path=data_dir / "bookings.json",
                      stock_path=data_dir / "stock.json", fx_path=data_dir / "fx.json",
+                     purchases_path=data_dir / "purchases.json",
                      telegram=lambda store, comments: telegram_from_env(store, comments, data_dir))
     if app.state.telegram:
         app.state.telegram.start()
