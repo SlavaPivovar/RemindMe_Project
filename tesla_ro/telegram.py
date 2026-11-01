@@ -166,6 +166,7 @@ class TelegramBot:
         self.render_act = None  # order -> bytes: акт приймання у PDF; задає web.py
         self.uah_rate = None  # () -> курс гривні або None; задає web.py
         self.approvals = None  # ApprovalStore; задає web.py
+        self.staff = None  # StaffStore; задає web.py
         self.service_name = ""
         self.service_address = ""
         self.photos = None  # PhotoStore; задає web.py
@@ -380,10 +381,35 @@ class TelegramBot:
 
     # --- вхідні повідомлення ---
 
-    @staticmethod
-    def author(sender: dict) -> str:
+    def author(self, sender: dict) -> str:
+        """Ім'я для записів: співробітник — як у списку співробітників, інші — як у Telegram."""
+        e = self.staff.by_tg(sender.get("id")) if self.staff and sender.get("id") else None
+        if e:
+            return e["name"]
         name = " ".join(x for x in (sender.get("first_name"), sender.get("last_name")) if x) or "Співробітник"
         return f"{name} (@{sender['username']})" if sender.get("username") else name
+
+    # --- співробітники ---
+
+    def is_staff(self, sender: dict) -> bool:
+        """У групі працюють лише співробітники, щойно хтось прив'язав Telegram (до того — усі учасники)."""
+        if self.staff is None or not self.staff.telegram_bound():
+            return True
+        e = self.staff.by_tg(sender.get("id"))
+        return bool(e and e["active"])
+
+    def owner_chats(self) -> list[int]:
+        """Куди надсилати власнику копії й підсумок: BACKUP_CHAT_ID або Telegram власників зі списку."""
+        if self.backup_chat_id:
+            return [self.backup_chat_id]
+        if self.staff is None:
+            return []
+        return [e["tg_id"] for e in self.staff.list() if e["role"] == "owner" and e["active"] and e.get("tg_id")]
+
+    def send_login_code(self, tg_id: int, code: str) -> None:
+        self.api.call("sendMessage", chat_id=tg_id, parse_mode="HTML", text=(
+            f"🔐 Код для входу{(' в ' + escape(self.service_name)) if self.service_name else ''}: <b>{code}</b>\n"
+            "Діє 5 хвилин. Нікому його не повідомляйте — навіть «співробітникам сервісу»."))
 
     def handle_update(self, update: dict) -> None:
         if update.get("callback_query"):
@@ -405,7 +431,13 @@ class TelegramBot:
             return  # чужі чати ігноруємо
         if command in ("/start", "/help"):
             self.api.call("sendMessage", chat_id=chat_id, text=HELP, parse_mode="HTML")
-        elif command == "/orders":
+            return
+        if not self.is_staff(msg.get("from", {})):
+            if command:  # на звичайні повідомлення не відповідаємо — щоб не засмічувати групу
+                self.api.call("sendMessage", chat_id=chat_id, reply_parameters={"message_id": msg["message_id"]},
+                              text="Ви не зареєстровані як співробітник. Попросіть власника надіслати вам запрошення.")
+            return
+        if command == "/orders":
             self._list_active()
         elif command == "/order":
             self._show_order(text.split(maxsplit=1)[1] if " " in text else "")
@@ -666,6 +698,10 @@ class TelegramBot:
             self.api.call("answerCallbackQuery", callback_query_id=query["id"])
             return
         sender = query.get("from", {})
+        if not self.is_staff(sender):
+            self.api.call("answerCallbackQuery", callback_query_id=query["id"], show_alert=True,
+                          text="Ви не зареєстровані як співробітник. Попросіть власника надіслати вам запрошення.")
+            return
         who = self.author(sender)
         number = parts[1]
         try:
@@ -946,16 +982,17 @@ class TelegramBot:
     # --- резервна копія ---
 
     def send_backup(self, chat_id: int | None = None) -> dict:
-        chat_id = chat_id or self.backup_chat_id
-        if not chat_id or self.make_backup is None:
-            raise TelegramError("BACKUP_CHAT_ID не задано")
+        chats = [chat_id] if chat_id else self.owner_chats()
+        if not chats or self.make_backup is None:
+            raise TelegramError("Немає куди надсилати: задайте BACKUP_CHAT_ID або прив'яжіть Telegram власника")
         data, info, filename = self.make_backup()
         caption = (f"🗄 Резервна копія {self.service_name}".rstrip() + f" за {datetime.now():%d.%m.%Y %H:%M}\n"
                    f"Замовлень: {info['orders']}, фото: {info['photos']}")
         if info.get("photos_skipped"):
             caption += f"\n⚠️ {info['photos_skipped']} фото не вмістились (ліміт Telegram 50 МБ) — " \
                        "завантажте повну копію в довіднику."
-        self.api.send_document(chat_id, filename, data, caption, content_type="application/zip")
+        for chat in chats:
+            self.api.send_document(chat, filename, data, caption, content_type="application/zip")
         return info
 
     def _backup_due(self) -> bool:
@@ -963,7 +1000,7 @@ class TelegramBot:
         return now.hour >= BACKUP_HOUR and self.links["backup_date"] != now.strftime("%Y-%m-%d")
 
     def backup_tick(self) -> None:
-        if not self.backup_chat_id or not self._backup_due():
+        if not self.owner_chats() or not self._backup_due():
             return
         self.send_backup()
         with self._lock:
@@ -1036,9 +1073,10 @@ class TelegramBot:
 
     def summary_tick(self) -> None:
         now = datetime.now()
-        if not self.backup_chat_id or now.hour < SUMMARY_HOUR or self.links["summary_date"] == now.strftime("%Y-%m-%d"):
+        if not self.owner_chats() or now.hour < SUMMARY_HOUR or self.links["summary_date"] == now.strftime("%Y-%m-%d"):
             return
-        self.api.call("sendMessage", chat_id=self.backup_chat_id, text=self.daily_summary(now), parse_mode="HTML")
+        for chat in self.owner_chats():
+            self.api.call("sendMessage", chat_id=chat, text=self.daily_summary(now), parse_mode="HTML")
         with self._lock:
             self.links["summary_date"] = now.strftime("%Y-%m-%d")
             self._save_links()
@@ -1064,22 +1102,35 @@ class TelegramBot:
     def _private(self, msg: dict, text: str, command: str) -> None:
         chat_id = msg["chat"]["id"]
         if command == "/today":
-            if self.backup_chat_id and chat_id == self.backup_chat_id:
+            if chat_id in self.owner_chats():
                 self.api.call("sendMessage", chat_id=chat_id, text=self.daily_summary(), parse_mode="HTML")
             else:
                 self.api.call("sendMessage", chat_id=chat_id, text="Підсумок дня надсилається лише власнику.")
             return
         if command == "/backup":
-            if not self.backup_chat_id or chat_id != self.backup_chat_id:
+            if chat_id not in self.owner_chats():
                 self.api.call("sendMessage", chat_id=chat_id, text=(
-                    f"Резервні копії надсилаються лише власнику. Ваш ID: {chat_id} — додайте його "
-                    "як BACKUP_CHAT_ID у налаштуваннях сервера."))
+                    "Резервні копії надсилаються лише власнику: прив'яжіть Telegram як співробітник із роллю "
+                    f"«власник» або додайте свій ID ({chat_id}) як BACKUP_CHAT_ID у налаштуваннях сервера."))
                 return
             self.api.call("sendMessage", chat_id=chat_id, text="Готую резервну копію…")
             self.send_backup(chat_id)
             return
         arg = text.split(maxsplit=1)[1].strip() if command == "/start" and " " in text else ""
         greeting = f"Це бот сервісу {self.service_name}." if self.service_name else "Це бот сервісу."
+        if arg.startswith("s_"):  # запрошення співробітника
+            sender = msg.get("from", {})
+            e = self.staff.bind_telegram(arg, sender.get("id") or chat_id, self.author(sender)) if self.staff else None
+            if e is None:
+                self.api.call("sendMessage", chat_id=chat_id,
+                              text="Запрошення недійсне або вже використане. Попросіть власника надіслати нове.")
+                return
+            from .staff import ROLES
+
+            self.api.call("sendMessage", chat_id=chat_id, text=(
+                f"Вітаємо, {e['name']}! Ви підключені як {ROLES.get(e['role'], '')} {self.service_name}.\n"
+                "Сюди надходитимуть коди для входу на сайт: введіть свій телефон на сторінці входу й код із цього чату."))
+            return
         if not arg.startswith("o_"):
             self.api.call("sendMessage", chat_id=chat_id,
                           text=f"{greeting} Сюди ми надсилатимемо ваші замовлення-наряди.")

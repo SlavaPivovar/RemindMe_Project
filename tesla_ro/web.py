@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import contextvars
 import datetime
 from decimal import Decimal
 import hashlib
@@ -49,6 +50,8 @@ from .photos import KINDS as PHOTO_KINDS
 from .photos import PhotoError as GalleryError
 from .photos import PhotoStore
 from .purchases import PurchaseError, PurchaseStore
+from .staff import RANK, ROLES, StaffError, StaffStore
+from .staff import public as staff_public
 from .stock import Stock, StockError
 from .render import fmt as fmt_money
 from .render import PdfUnavailable, pdf_filename, render_html, render_pdf
@@ -62,7 +65,31 @@ from .vision import PhotoError, parse_data_url, recognize
 
 STATIC = Path(__file__).parent / "static"
 ICONS = STATIC / "icons"
-PUBLIC_PATHS = ("/login", "/logout", "/manifest.webmanifest", "/favicon.ico")
+PUBLIC_PATHS = ("/login", "/login/code", "/login/verify", "/logout", "/manifest.webmanifest", "/favicon.ico")
+OWNER_USER = {"id": "owner", "name": "Власник", "role": "owner"}  # вхід за загальним паролем сервісу
+CURRENT_USER: contextvars.ContextVar[dict] = contextvars.ContextVar("current_user", default=OWNER_USER)
+
+
+def can_see_money() -> bool:
+    """Маржу, касу й борги бачать адміністратор і власник; майстер — ні."""
+    return RANK[CURRENT_USER.get()["role"]] >= RANK["admin"]
+
+# Що кому можна (решта — усім, хто увійшов): (методи або None — усі, шлях-регулярка, мінімальна роль).
+PERMISSIONS = [
+    (None, r"^/api/staff", "owner"),
+    (("PUT",), r"^/api/catalog/settings$", "owner"),
+    (None, r"^/api/backup", "owner"),
+    (None, r"^/api/usage$", "owner"),
+    (("POST", "DELETE"), r"^/api/order/payments", "admin"),
+    (("DELETE",), r"^/api/orders/[^/]+$", "admin"),
+    (None, r"^/api/(cash|debts|broadcast)$", "admin"),
+    (None, r"^/api/clients/export", "admin"),
+    (("POST", "PUT", "DELETE"), r"^/api/catalog/(operations|parts|import)", "admin"),
+    (None, r"^/api/catalog/export", "admin"),
+    (("POST", "PUT"), r"^/api/stock/", "admin"),
+    (None, r"^/api/stock/to-order", "admin"),
+    (None, r"^/api/purchases", "admin"),
+]
 COOKIE = "tesla_ro_sid"
 AUTH_COOKIE = "tesla_ro_auth"
 AUTH_TTL = 30 * 24 * 3600  # вхід діє 30 днів
@@ -113,6 +140,22 @@ class IntakeIn(BaseModel):
 class SignatureIn(BaseModel):
     image: str  # data:image/png;base64,...
     signed_by: str = ""
+
+
+class CodeIn(BaseModel):
+    phone: str
+    code: str = ""
+
+
+class StaffIn(BaseModel):
+    name: str | None = None
+    phone: str | None = None
+    role: str | None = None
+    active: bool | None = None
+
+
+class StaffPasswordIn(BaseModel):
+    password: str = ""  # порожньо — прибрати особистий пароль
 
 
 class StockIn(BaseModel):
@@ -251,6 +294,7 @@ def create_app(
     stock_path: str | Path | None = None,
     fx_path: str | Path | None = None,
     purchases_path: str | Path | None = None,
+    staff_path: str | Path | None = None,
     fx_fetch=None,
 ) -> FastAPI:
     """password — пароль для входу; без нього вхід не потрібен (лише для локального запуску).
@@ -264,6 +308,7 @@ def create_app(
     ledger = UsageLedger(usage_path)
     comments = CommentStore(orders_dir)
     photos = PhotoStore(orders_dir)
+    staff = StaffStore(staff_path)
     approvals = ApprovalStore(orders_dir)
     stock = Stock(stock_path)
     purchases = PurchaseStore(purchases_path)
@@ -279,6 +324,7 @@ def create_app(
         bot.render_pdf = lambda order: render_pdf(order, catalog.service, fx_rate())
         bot.uah_rate = lambda: fx_rate()
         bot.approvals = approvals
+        bot.staff = staff
         for number, old in list(bot.links.get("approvals", {}).items()):  # погодження зі старої версії
             approvals.import_legacy(number, old)
         bot.service_name = catalog.service.get("name", "")
@@ -296,28 +342,78 @@ def create_app(
     failures: dict[str, list[float]] = {}
     failures_lock = threading.Lock()
 
-    def sign(expires: int) -> str:
-        mac = hmac.new(auth_key, str(expires).encode(), hashlib.sha256).hexdigest()
-        return f"{expires}.{mac}"
+    def sign(uid: str, ver: int, expires: int) -> str:
+        payload = f"{uid}.{ver}.{expires}"
+        return f"{payload}.{hmac.new(auth_key, payload.encode(), hashlib.sha256).hexdigest()}"
 
-    def is_authorized(token: str | None) -> bool:
+    def user_from(token: str | None) -> dict | None:
+        """Хто увійшов: власник за загальним паролем або співробітник (активний, з тією ж версією входу)."""
         if password is None:
-            return True
-        if not token or "." not in token:
-            return False
-        expires = token.split(".", 1)[0]
-        return expires.isdigit() and int(expires) > time.time() and hmac.compare_digest(token, sign(int(expires)))
+            return dict(OWNER_USER)  # локальний запуск без пароля — усе дозволено
+        parts = (token or "").split(".")
+        if len(parts) != 4 or not parts[2].isdigit() or int(parts[2]) < time.time():
+            return None
+        uid, ver, expires, _ = parts
+        if not hmac.compare_digest(token, sign(uid, int(ver) if ver.isdigit() else -1, int(expires))):
+            return None
+        if uid == "owner":
+            return dict(OWNER_USER)
+        e = staff.get(uid)
+        if e is None or not e["active"] or str(e.get("ver", 1)) != ver:
+            return None
+        return {"id": e["id"], "name": e["name"], "role": e["role"]}
+
+    def allowed(user: dict, method: str, path: str) -> str | None:
+        """None — можна; інакше — потрібна роль."""
+        for methods, pattern, role in PERMISSIONS:
+            if (methods is None or method in methods) and re.match(pattern, path) and RANK[user["role"]] < RANK[role]:
+                return role
+        return None
 
     @app.middleware("http")
     async def require_login(request: Request, call_next):
+        path = request.url.path
         # Іконки й маніфест браузер запитує без cookie (ярлик на головному екрані) — вони публічні.
         # /c/<токен> — сторінка замовлення для клієнта: доступ за посиланням із неповторним токеном.
-        if request.url.path in PUBLIC_PATHS or request.url.path.startswith(("/icons/", "/c/")) \
-                or is_authorized(request.cookies.get(AUTH_COOKIE)):
+        if path in PUBLIC_PATHS or path.startswith(("/icons/", "/c/")):
             return await call_next(request)
-        if request.url.path.startswith("/api/"):
-            return JSONResponse({"error": "Потрібно увійти"}, status_code=401)
-        return RedirectResponse("/login", status_code=303)
+        user = user_from(request.cookies.get(AUTH_COOKIE))
+        if user is None:
+            if path.startswith("/api/"):
+                return JSONResponse({"error": "Потрібно увійти"}, status_code=401)
+            return RedirectResponse("/login", status_code=303)
+        need = allowed(user, request.method, path)
+        if need:
+            return JSONResponse({"error": f"Недостатньо прав: потрібна роль «{ROLES[need]}»"}, status_code=403)
+        request.state.user = user
+        CURRENT_USER.set(user)
+        return await call_next(request)
+
+    def actor(request: Request, fallback: str = "") -> str:
+        """Ім'я для записів «хто зробив»: співробітника — з входу (не підробити), власника — як указав."""
+        user = getattr(request.state, "user", None) or OWNER_USER
+        return user["name"] if user["id"] != "owner" else (fallback.strip()[:80] or user["name"])
+
+    def login_response(user_id: str, ver: int, to_json: bool = False):
+        cookie = sign(user_id, ver, int(time.time()) + AUTH_TTL)
+        resp = JSONResponse({"ok": True}) if to_json else RedirectResponse("/", status_code=303)
+        resp.set_cookie(AUTH_COOKIE, cookie, max_age=AUTH_TTL, httponly=True, samesite="lax", secure=secure_cookies)
+        return resp
+
+    def too_many(ip: str) -> bool:
+        now = time.time()
+        with failures_lock:
+            for key in list(failures):
+                failures[key] = [t for t in failures[key] if now - t < FAIL_WINDOW]
+                if not failures[key]:
+                    del failures[key]
+            total = sum(len(v) for v in failures.values())
+            return len(failures.get(ip, [])) >= MAX_FAILS or total >= MAX_FAILS_TOTAL
+
+    def failed(ip: str) -> None:
+        with failures_lock:
+            failures.setdefault(ip, []).append(time.time())
+        time.sleep(1)
 
     # --- ярлик на головному екрані телефона (PWA) ---
 
@@ -354,29 +450,53 @@ def create_app(
         page = (STATIC / "login.html").read_text(encoding="utf-8")
         page = page.replace("<!--NAME-->", html.escape(catalog.service.get("name") or service_name))
         page = page.replace("<!--SHORT-->", html.escape(short_name(catalog.service.get("name") or service_name)))
+        page = page.replace("<!--TELEGRAM-->", "1" if bot else "")
         return page.replace("<!--ERROR-->", '<p class="err">Невірний пароль</p>' if error else "")
 
     @app.post("/login")
-    def login(request: Request, password_input: str = Form("", alias="password")):
+    def login(request: Request, password_input: str = Form("", alias="password"), phone: str = Form("")):
+        """Пароль: без телефону — загальний пароль сервісу (вхід власника), з телефоном — особистий пароль."""
         ip = request.client.host if request.client else "?"
-        now = time.time()
-        with failures_lock:
-            for key in list(failures):
-                failures[key] = [t for t in failures[key] if now - t < FAIL_WINDOW]
-                if not failures[key]:
-                    del failures[key]
-            total = sum(len(v) for v in failures.values())
-            if len(failures.get(ip, [])) >= MAX_FAILS or total >= MAX_FAILS_TOTAL:
-                return HTMLResponse("Забагато спроб входу. Спробуйте за 15 хвилин.", status_code=429)
-        if password is None or hmac.compare_digest(password_input.encode(), password.encode()):
-            resp = RedirectResponse("/", status_code=303)
-            resp.set_cookie(AUTH_COOKIE, sign(int(now) + AUTH_TTL), max_age=AUTH_TTL,
-                            httponly=True, samesite="lax", secure=secure_cookies)
-            return resp
-        with failures_lock:
-            failures.setdefault(ip, []).append(now)
-        time.sleep(1)
-        return RedirectResponse("/login?error=1", status_code=303)
+        if too_many(ip):
+            return HTMLResponse("Забагато спроб входу. Спробуйте за 15 хвилин.", status_code=429)
+        if phone.strip():
+            e = staff.login_password(phone, password_input)
+            if e:
+                return login_response(e["id"], e.get("ver", 1))
+        elif password is None or hmac.compare_digest(password_input.encode(), password.encode()):
+            return login_response("owner", 0)
+        failed(ip)
+        return RedirectResponse("/login?error=1" + ("&phone=1" if phone.strip() else ""), status_code=303)
+
+    @app.post("/login/code")
+    def login_code(body: CodeIn, request: Request):
+        """Надіслати співробітнику код для входу в Telegram."""
+        ip = request.client.host if request.client else "?"
+        if too_many(ip):
+            raise HTTPException(429, "Забагато спроб входу. Спробуйте за 15 хвилин.")
+        if not bot:
+            raise HTTPException(503, "Telegram-бот не налаштований — увійдіть паролем")
+        try:
+            e, code = staff.request_code(body.phone)
+        except StaffError as exc:
+            failed(ip)
+            raise HTTPException(400, str(exc)) from None
+        try:
+            bot.send_login_code(e["tg_id"], code)
+        except (TelegramError, httpx.HTTPError):
+            raise HTTPException(502, "Не вдалося надіслати код у Telegram — спробуйте ще раз або увійдіть паролем") from None
+        return {"ok": True, "name": e["name"]}
+
+    @app.post("/login/verify")
+    def login_verify(body: CodeIn, request: Request):
+        ip = request.client.host if request.client else "?"
+        if too_many(ip):
+            raise HTTPException(429, "Забагато спроб входу. Спробуйте за 15 хвилин.")
+        e = staff.verify_code(body.phone, body.code)
+        if e is None:
+            failed(ip)
+            raise HTTPException(400, "Невірний або застарілий код")
+        return login_response(e["id"], e.get("ver", 1), to_json=True)
 
     @app.get("/logout")
     def logout():
@@ -438,6 +558,7 @@ def create_app(
         return {"order": conv.session.snapshot(), "history": history, "service": catalog.service,
                 "statuses": STATUSES, "telegram": bot is not None, "photo_kinds": PHOTO_KINDS,
                 "intake_items": INTAKE_ITEMS,
+                "user": {**CURRENT_USER.get(), "role_label": ROLES[CURRENT_USER.get()["role"]]},
                 "fx": fx_view(),
                 "short_name": short_name(catalog.service.get("name") or service_name),
                 "backup_chat": bool(bot and bot.backup_chat_id),
@@ -574,7 +695,7 @@ def create_app(
         raise HTTPException(404, "Невідомий тип рядка")
 
     @app.post("/api/order/status")
-    def order_status(body: StatusIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+    def order_status(request: Request, body: StatusIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
         conv = conversation(tesla_ro_sid, response)
         if conv.session.order is None:
             raise HTTPException(404, "Замовлення-наряд ще не створено")
@@ -582,7 +703,7 @@ def create_app(
             raise HTTPException(409, "Помічник ще відповідає — спробуйте за мить")
         try:
             try:
-                conv.session.order.set_status(body.status, by=body.by.strip()[:80])
+                conv.session.order.set_status(body.status, by=actor(request, body.by))
             except StatusError as exc:
                 raise HTTPException(400, str(exc)) from None
             try:
@@ -594,7 +715,7 @@ def create_app(
         return {"order": conv.session.snapshot()}
 
     @app.put("/api/order/assignee")
-    def set_assignee(body: AssigneeIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+    def set_assignee(request: Request, body: AssigneeIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
         conv = conversation(tesla_ro_sid, response)
         name = " ".join(body.name.split())[:80]
 
@@ -608,7 +729,7 @@ def create_app(
     # --- оплата, каса, боржники ---
 
     @app.post("/api/order/payments")
-    def add_payment(body: PaymentIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+    def add_payment(request: Request, body: PaymentIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
         conv = conversation(tesla_ro_sid, response)
 
         def action():
@@ -624,7 +745,7 @@ def create_app(
                 amount, uah_info = str(fx_mod.to_usd(value, rate["rate"])), {"amount": value.quantize(Decimal("0.01")),
                                                                                  "rate": rate["rate"].normalize()}
             try:
-                p = conv.session.order.add_payment(amount, body.method, body.by, body.note, uah=uah_info)
+                p = conv.session.order.add_payment(amount, body.method, actor(request, body.by), body.note, uah=uah_info)
             except PaymentError as exc:
                 raise ToolError(str(exc)) from None
             conv.session._autosave()
@@ -634,7 +755,7 @@ def create_app(
 
     # id — у параметрі запиту: шлях /api/order/<щось>/<n> уже зайнятий видаленням рядків замовлення.
     @app.delete("/api/order/payments")
-    def delete_payment(payment_id: str, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+    def delete_payment(request: Request, payment_id: str, response: Response, tesla_ro_sid: str | None = Cookie(None)):
         conv = conversation(tesla_ro_sid, response)
 
         def action():
@@ -925,7 +1046,7 @@ def create_app(
         return {**preview, "catalog": catalog_view() if apply else None}
 
     def backup(max_bytes: int | None = None):
-        extra = [p for p in (catalog.path, ledger.path, bookings.path, stock.path, stock.moves_path, purchases.path,
+        extra = [p for p in (catalog.path, ledger.path, bookings.path, stock.path, stock.moves_path, purchases.path, staff.path,
                              bot.links_path if bot else None) if p]
         data, info = make_backup(Path(orders_dir), extra, max_bytes)
         return data, info, backup_filename(catalog.service.get("name", ""))
@@ -1108,13 +1229,13 @@ def create_app(
         return comments.list(number)
 
     @app.post("/api/orders/{number}/comments")
-    def add_comment(number: str, body: CommentIn):
+    def add_comment(request: Request, number: str, body: CommentIn):
         try:
             store.load(number)
         except FileNotFoundError:
             raise HTTPException(404, "Замовлення-наряд ще не збережено — спершу заповніть його") from None
         try:
-            comment = comments.add(number, body.author or "Співробітник", body.text, source="web")
+            comment = comments.add(number, actor(request, body.author or "Співробітник"), body.text, source="web")
         except CommentError as exc:
             raise HTTPException(400, str(exc)) from None
         if bot:
@@ -1220,12 +1341,12 @@ def create_app(
             raise HTTPException(500, "Не вдалося зберегти запис") from None
 
     @app.post("/api/bookings/agent")
-    def bookings_agent(body: BookingAgentIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
+    def bookings_agent(request: Request, body: BookingAgentIn, response: Response, tesla_ro_sid: str | None = Cookie(None)):
         conv = conversation(tesla_ro_sid, response)
         booking_agent.service = catalog.service
         try:
             with api_errors():
-                result = booking_agent.send(f"web:{conv.channel}", body.text, body.author.strip()[:80], source="web")
+                result = booking_agent.send(f"web:{conv.channel}", body.text, actor(request, body.author), source="web")
         except bk.BookingError as exc:
             raise HTTPException(400, str(exc)) from None
         return {"reply": result["reply"] or "Готово."}
@@ -1236,18 +1357,18 @@ def create_app(
         return {"ok": True}
 
     @app.post("/api/bookings")
-    def booking_create(body: BookingIn):
+    def booking_create(request: Request, body: BookingIn):
         data = body.model_dump(exclude={"author"}, exclude_none=True)
-        return booking_edit(lambda: bookings.create(data, by=body.author.strip(), source="web"))
+        return booking_edit(lambda: bookings.create(data, by=actor(request, body.author), source="web"))
 
     @app.put("/api/bookings/{booking_id}")
-    def booking_update(booking_id: str, body: BookingIn):
+    def booking_update(request: Request, booking_id: str, body: BookingIn):
         data = body.model_dump(exclude={"author"}, exclude_none=True)
-        return booking_edit(lambda: bookings.update(booking_id, data, by=body.author.strip())[1])
+        return booking_edit(lambda: bookings.update(booking_id, data, by=actor(request, body.author))[1])
 
     @app.post("/api/bookings/{booking_id}/status")
-    def booking_status(booking_id: str, body: BookingStatusIn):
-        return booking_edit(lambda: bookings.set_status(booking_id, body.status, by=body.author.strip()))
+    def booking_status(request: Request, booking_id: str, body: BookingStatusIn):
+        return booking_edit(lambda: bookings.set_status(booking_id, body.status, by=actor(request, body.author)))
 
     @app.post("/api/bookings/{booking_id}/order")
     def booking_to_order(booking_id: str, response: Response, tesla_ro_sid: str | None = Cookie(None)):
@@ -1380,7 +1501,7 @@ def create_app(
         p = catalog.parts[part_no]
         qty, minimum = stock.qty(part_no), stock.min(part_no)
         res = round((booked or {}).get(part_no, 0), 3)
-        cost = stock.cost(part_no)
+        cost = stock.cost(part_no) if can_see_money() else None
         return {"part_no": part_no, "name": p.name, "unit": p.unit, "price": p.price, "qty": qty, "min": minimum,
                 "reserved": res, "free": round(qty - res, 3), "low": stock.is_low(part_no), "cost": cost,
                 "markup": round((p.price / cost - 1) * 100) if cost else None}
@@ -1402,12 +1523,12 @@ def create_app(
         return {"item": stock_row(part_no, reserved())}
 
     @app.post("/api/stock/{part_no}/receive")
-    def stock_receive(part_no: str, body: StockIn):
-        return stock_edit(part_no, lambda: stock.receive(part_no, body.qty, body.by, body.note, body.cost or None))
+    def stock_receive(request: Request, part_no: str, body: StockIn):
+        return stock_edit(part_no, lambda: stock.receive(part_no, body.qty, actor(request, body.by), body.note, body.cost or None))
 
     @app.post("/api/stock/{part_no}/adjust")
-    def stock_adjust(part_no: str, body: StockIn):
-        return stock_edit(part_no, lambda: stock.adjust(part_no, body.qty, body.by, body.note or "інвентаризація"))
+    def stock_adjust(request: Request, part_no: str, body: StockIn):
+        return stock_edit(part_no, lambda: stock.adjust(part_no, body.qty, actor(request, body.by), body.note or "інвентаризація"))
 
     @app.put("/api/stock/{part_no}/min")
     def stock_min(part_no: str, body: StockIn):
@@ -1487,7 +1608,7 @@ def create_app(
             if t["days"] is not None and t["days"] >= 2:
                 alerts.append({"kind": "pickup", "number": t["number"],
                                "text": f"{t['number']} — готово {int(t['days'])} дн., клієнт не забрав ({t['client'] or '—'})"})
-        for d in debts[:5]:
+        for d in debts[:5] if can_see_money() else []:
             alerts.append({"kind": "debt", "number": d["number"],
                            "text": f"{d['number']} — борг {fmt_money(d['balance'])} $ ({d['client'] or '—'})"})
         if low:
@@ -1502,8 +1623,9 @@ def create_app(
             "now": now.strftime("%d.%m.%Y %H:%M"), "weekday": bk.WEEKDAYS[today.weekday()],
             "kpi": {"accepted": len(board["прийнято"]), "in_work": len(board["в роботі"]), "ready": len(board["готово"]),
                     "bookings_today": sum(1 for b in todays if b["status"] != bk.CANCELLED),
-                    "cash_today": str(money(cash_today)),
-                    "debts": str(money(sum((Decimal(d["balance"]) for d in debts), Decimal("0")))), "low_stock": len(low)},
+                    "cash_today": str(money(cash_today)) if can_see_money() else None,
+                    "debts": str(money(sum((Decimal(d["balance"]) for d in debts), Decimal("0")))) if can_see_money() else None,
+                    "low_stock": len(low)},
             "board": board, "alerts": alerts,
             "bookings_today": [booking_view(b) for b in todays],
             "bookings_tomorrow": len(bookings.list(tomorrow, tomorrow)),
@@ -1512,14 +1634,14 @@ def create_app(
         }
 
     @app.post("/api/orders/{number}/status")
-    def saved_order_status(number: str, body: StatusIn):
+    def saved_order_status(request: Request, number: str, body: StatusIn):
         """Змінити статус збереженого замовлення з головної сторінки (без відкриття)."""
         try:
             order = store.load(number)
         except FileNotFoundError:
             raise HTTPException(404, "Замовлення-наряд не знайдено") from None
         try:
-            order.set_status(body.status, by=body.by.strip()[:80])
+            order.set_status(body.status, by=actor(request, body.by))
         except StatusError as exc:
             raise HTTPException(400, str(exc)) from None
         try:
@@ -1617,21 +1739,21 @@ def create_app(
         return {"purchases": purchases.list(), "suppliers": purchases.suppliers()}
 
     @app.post("/api/purchases")
-    def purchase_create(body: dict):
-        return po_edit(lambda: purchases.create(body, catalog.parts, by=str(body.get("by") or "")))
+    def purchase_create(request: Request, body: dict):
+        return po_edit(lambda: purchases.create(body, catalog.parts, by=actor(request, str(body.get("by") or ""))))
 
     @app.put("/api/purchases/{po_id}")
     def purchase_update(po_id: str, body: dict):
         return po_edit(lambda: purchases.update(po_id, body, catalog.parts))
 
     @app.post("/api/purchases/{po_id}/receive")
-    def purchase_receive(po_id: str, body: dict):
+    def purchase_receive(request: Request, po_id: str, body: dict):
         def action():
             po, got = purchases.receive(po_id, body.get("lines") or [])
             label = f"{po['number']}" + (f", {po['supplier']}" if po["supplier"] else "")
             for x in got:
                 if x["part_no"] in catalog.parts:
-                    stock.receive(x["part_no"], x["qty"], str(body.get("by") or ""), label, x["cost"] or None)
+                    stock.receive(x["part_no"], x["qty"], actor(request, str(body.get("by") or "")), label, x["cost"] or None)
             return po
         return po_edit(action)
 
@@ -1644,6 +1766,49 @@ def create_app(
         return Response(export_purchase(po, catalog.service),
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(po['number'])}.xlsx"})
+
+    # --- співробітники (лише власник; див. PERMISSIONS) ---
+
+    def staff_view(request: Request) -> dict:
+        username = None
+        if bot:
+            with contextlib.suppress(TelegramError, httpx.HTTPError):
+                username = bot.bot_username()
+        items = []
+        for e in staff.list():
+            item = staff_public(e)
+            item["invite_link"] = f"https://t.me/{username}?start={e['invite']}" if username and e.get("invite") else ""
+            items.append(item)
+        return {"staff": items, "roles": ROLES, "telegram": bot is not None, "login_url": f"{public_url(request)}/login"}
+
+    def staff_edit(request: Request, action):
+        try:
+            action()
+        except StaffError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except KeyError:
+            raise HTTPException(404, "Співробітника не знайдено") from None
+        return staff_view(request)
+
+    @app.get("/api/staff")
+    def staff_list(request: Request):
+        return staff_view(request)
+
+    @app.post("/api/staff")
+    def staff_create(request: Request, body: StaffIn):
+        return staff_edit(request, lambda: staff.create(body.model_dump(exclude_none=True)))
+
+    @app.put("/api/staff/{emp_id}")
+    def staff_update(request: Request, emp_id: str, body: StaffIn):
+        return staff_edit(request, lambda: staff.update(emp_id, body.model_dump(exclude_none=True)))
+
+    @app.put("/api/staff/{emp_id}/password")
+    def staff_password(request: Request, emp_id: str, body: StaffPasswordIn):
+        return staff_edit(request, lambda: staff.set_password(emp_id, body.password or None))
+
+    @app.post("/api/staff/{emp_id}/invite")
+    def staff_invite(request: Request, emp_id: str):
+        return staff_edit(request, lambda: staff.new_invite(emp_id))
 
     # --- фото до замовлення ---
 
@@ -1670,7 +1835,7 @@ def create_app(
         parts = {line.part_no for line in order.parts if line.part_no in catalog.parts}
         rate = fx_rate()
         return {"photos": photos.list(number), "approval": approvals.get(number),
-                "stock": {p: stock.qty(p) for p in parts}, "margin": parts_margin(order),
+                "stock": {p: stock.qty(p) for p in parts}, "margin": parts_margin(order) if can_see_money() else None,
                 "uah": {**fx_mod.describe(rate, order.totals()["total"]), "balance": str(fx_mod.uah(order.balance(), rate["rate"]))}
                 if rate else None}
 
@@ -1689,11 +1854,11 @@ def create_app(
             raise HTTPException(404, "Замовлення-наряд ще не збережено — спершу заповніть його") from None
 
     @app.post("/api/orders/{number}/photos")
-    def add_gallery_photo(number: str, body: GalleryPhotoIn):
+    def add_gallery_photo(request: Request, number: str, body: GalleryPhotoIn):
         saved_order(number)
         try:
             media_type, data = parse_data_url(body.image)
-            photos.add(number, base64.b64decode(data), media_type, body.kind, body.author or "Співробітник")
+            photos.add(number, base64.b64decode(data), media_type, body.kind, actor(request, body.author or "Співробітник"))
         except (PhotoError, GalleryError) as exc:
             raise HTTPException(400, str(exc)) from None
         return photos.list(number)
@@ -1776,7 +1941,7 @@ def main(argv: list[str] | None = None) -> int:
                      password=password, secure_cookies=secure, secret=load_secret(data_dir),
                      usage_path=data_dir / "usage.jsonl", bookings_path=data_dir / "bookings.json",
                      stock_path=data_dir / "stock.json", fx_path=data_dir / "fx.json",
-                     purchases_path=data_dir / "purchases.json",
+                     purchases_path=data_dir / "purchases.json", staff_path=data_dir / "staff.json",
                      telegram=lambda store, comments: telegram_from_env(store, comments, data_dir))
     if app.state.telegram:
         app.state.telegram.start()

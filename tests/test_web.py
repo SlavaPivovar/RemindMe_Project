@@ -120,7 +120,7 @@ def test_password_required(tmp_path, monkeypatch):
     assert r.status_code == 303 and r.headers["location"] == "/login"
     assert web.get("/print/ЗН-2026-00001", follow_redirects=False).status_code == 303
     login = web.get("/login").text
-    assert "введіть пароль" in login and "<h1>DK-TeslaService</h1>" in login
+    assert "Вхід для співробітників" in login and "<h1>DK-TeslaService</h1>" in login
 
     r = web.post("/login", data={"password": "wrong"}, follow_redirects=False)
     assert r.headers["location"] == "/login?error=1"

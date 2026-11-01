@@ -255,6 +255,13 @@ select.status{font:inherit;font-size:13px;font-weight:600;border-radius:999px;pa
 #poLines input{width:100%;min-width:60px;font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
 #poLines td:first-child{min-width:150px}
 .po-total{margin:10px 0;text-align:right}
+body.role-master .need-admin, body.role-master .need-owner, body.role-admin .need-owner{display:none !important}
+.staff-add{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1.5fr) auto auto;gap:6px;margin:8px 0 12px}
+.staff-add input,.staff-add select,.staff-row select{font:inherit;padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);min-width:0}
+.staff-row.off{opacity:.55}
+.staff-acts{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end}
+.staff-acts button{font-size:13px;padding:4px 9px}
+.who{color:var(--muted);font-weight:400}
 .tg{font-size:12px;white-space:nowrap;color:var(--ok)}
 .tg.off{color:var(--muted)}
 tr.click{cursor:pointer}
@@ -307,6 +314,7 @@ button.danger-lite{color:var(--accent)}
   #catalogList .hide-m,#orderBody .hide-m,#clientsBody .hide-m,#cashBody .hide-m{display:none}
   .bk-agent textarea{grid-column:1 / -1;min-height:64px}
   .pay-form #payAmount{max-width:none}
+  .staff-add{grid-template-columns:1fr 1fr}
   .pay-form #payNote,.pay-form button{flex-basis:100%}
   .pay-list div{grid-template-columns:minmax(0,1fr) auto auto}
   .pay-list span:first-child{grid-column:1 / -1}
@@ -461,7 +469,7 @@ details.fold[open]>summary::before{content:"▾ "}
   <button id="btnOrders" title="Збережені замовлення-наряди">📁 <span class="label">Збережені</span></button>
   <button id="btnClients" title="База клієнтів">👥 <span class="label">Клієнти</span></button>
   <button id="btnBookings" title="Запис клієнтів на сервіс">📅 <span class="label">Запис</span></button>
-  <button id="btnCash" title="Каса й боржники">💰 <span class="label">Каса</span></button>
+  <button id="btnCash" class="need-admin" title="Каса й боржники">💰 <span class="label">Каса</span></button>
   <button id="btnNew" title="Почати нове замовлення-наряд">＋ <span class="label">Нове</span></button>
   <button id="btnLogout" title="Вийти" hidden>⎋ <span class="label">Вийти</span></button>
   <button id="btnMenu" aria-haspopup="true" aria-expanded="false">☰ Меню</button>
@@ -471,7 +479,7 @@ details.fold[open]>summary::before{content:"▾ "}
   <button data-proxy="#btnOrders">📁 Збережені замовлення</button>
   <button data-proxy="#btnBookings">📅 Запис на сервіс</button>
   <button data-proxy="#btnClients">👥 Клієнти</button>
-  <button data-proxy="#btnCash">💰 Каса й боржники</button>
+  <button data-proxy="#btnCash" class="need-admin">💰 Каса й боржники</button>
   <button data-proxy="#btnCatalog">📚 Довідник і склад</button>
   <button data-proxy="#btnLogout" class="menu-logout" id="menuLogout" hidden>⎋ Вийти</button>
 </nav>
@@ -502,7 +510,7 @@ details.fold[open]>summary::before{content:"▾ "}
   <div class="dh"><h2>Довідник</h2><button id="closeCatalog">✕</button></div>
   <div class="db">
     <div class="seg" id="catTabs">
-      <button data-view="ops" class="on">Роботи</button><button data-view="parts">Запчастини</button><button data-view="stock">Склад</button><button data-view="purchases">Закупівлі</button><button data-view="settings">Налаштування</button>
+      <button data-view="ops" class="on">Роботи</button><button data-view="parts">Запчастини</button><button data-view="stock">Склад</button><button data-view="purchases" class="need-admin">Закупівлі</button><button data-view="staff" class="need-owner">Співробітники</button><button data-view="settings" class="need-owner">Налаштування</button>
     </div>
     <div id="catalogList">Завантаження…</div>
   </div>
@@ -604,7 +612,10 @@ let ASSIGNEES = [], INTAKE_ITEMS = [];
 let currentOrder = null, TELEGRAM = false, BACKUP_CHAT = false, PHOTO_KINDS = ["до", "після", "пошкодження", "інше"];
 
 // ---------- Внутрішні коментарі (не друкуються) ----------
-function authorName(){ try{ return localStorage.getItem("author") || ""; }catch(e){ return ""; } }
+let USER = {id: "owner", name: "Власник", role: "owner"};
+const isEmployee = () => USER && USER.id !== "owner";
+// Співробітник підписується своїм ім'ям зі входу; власник за загальним паролем — як указав сам.
+function authorName(){ if (isEmployee()) return USER.name; try{ return localStorage.getItem("author") || ""; }catch(e){ return ""; } }
 function setAuthorName(v){ try{ localStorage.setItem("author", v); }catch(e){} }
 
 function renderComments(list){
@@ -622,7 +633,7 @@ function renderComments(list){
         <a class="sub" href="/voice/${encodeURIComponent(currentOrder.number)}/${esc(c.voice.file)}" download>⬇ завантажити запис</a>` : ""}</div>`).join("") || `<div class="sub">Коментарів ще немає.</div>`}</div>
     <form class="comment-form" id="commentForm">
       <textarea id="cText" placeholder="Що зроблено, що помітили, що лишилось…" aria-label="Коментар">${esc(typing)}</textarea>
-      <input id="cAuthor" placeholder="Ваше ім'я" value="${esc(authorName())}" aria-label="Ваше ім'я">
+      <input id="cAuthor" placeholder="Ваше ім'я" value="${esc(authorName())}" aria-label="Ваше ім'я" ${isEmployee() ? "hidden" : ""}>
       <button class="primary">Додати</button>
     </form>`;
   if (typing){ $("#cText").focus(); }
@@ -787,10 +798,10 @@ function renderPayments(o){
   const bal = Number(o.balance), cur = esc(o.currency);
   box.innerHTML = `<div class="sec-head"><h3>💵 Оплата</h3><span class="pay-st ${PAY_CLASS[o.payment_status] || ""}">${esc(o.payment_status)}</span></div>
     ${o.payments.length ? `<div class="pay-list">${o.payments.map(p => `<div><span>${esc(p.at)}</span><span>${esc(p.method)}${p.by ? " · " + esc(p.by) : ""}${p.note ? " · " + esc(p.note) : ""}</span>
-      <b class="${Number(p.amount) < 0 ? "neg" : ""}">${Number(p.amount) < 0 ? "повернення " : ""}${num(Math.abs(Number(p.amount)))} ${cur}${p.amount_uah ? `<small class="sub"> (${num(Math.abs(Number(p.amount_uah)))} грн)</small>` : ""}</b><button data-pay-del="${esc(p.id)}" title="Видалити запис про оплату">✕</button></div>`).join("")}</div>` : ""}
+      <b class="${Number(p.amount) < 0 ? "neg" : ""}">${Number(p.amount) < 0 ? "повернення " : ""}${num(Math.abs(Number(p.amount)))} ${cur}${p.amount_uah ? `<small class="sub"> (${num(Math.abs(Number(p.amount_uah)))} грн)</small>` : ""}</b><button class="need-admin" data-pay-del="${esc(p.id)}" title="Видалити запис про оплату">✕</button></div>`).join("")}</div>` : ""}
     <div class="pay-sum"><span>Сплачено: <b>${num(o.paid)} ${cur}</b></span>
       <span>${bal > 0 ? `До сплати: <b class="due">${num(bal)} ${cur}</b>${o.uah ? ` <span class="sub">≈ ${num(o.uah.balance)} грн</span>` : ""}` : bal < 0 ? `Переплата: <b>${num(-bal)} ${cur}</b>` : Number(o.totals.total) > 0 ? "✓ Сплачено повністю" : ""}</span></div>
-    <form class="pay-form" id="payForm">
+    <form class="pay-form need-admin" id="payForm">
       <input id="payAmount" inputmode="decimal" aria-label="Сума" placeholder="Сума" value="${bal > 0 ? String(bal).replace(".", ",") : ""}">
       ${o.uah ? `<select id="payCur" aria-label="Валюта"><option value="USD">$</option><option value="UAH">грн</option></select>` : ""}
       <select id="payMethod" aria-label="Спосіб оплати">${PAY_METHODS.map(m => `<option>${m}</option>`).join("")}</select>
@@ -957,7 +968,7 @@ function renderOrder(o){
       <select class="status ${stClass(o.status)}" id="statusSel" title="Статус замовлення-наряду">
         ${STATUSES.map(s => `<option ${s === o.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
       <span class="badge">${esc(o.created_at)}</span>
-      <div class="actions"><button id="btnSend" title="Надіслати клієнту">📤 <span class="label">Клієнту</span></button><button id="btnPrint">🖨 Друк</button><button id="btnDelete" class="danger-lite" title="Видалити замовлення-наряд">🗑</button></div>
+      <div class="actions"><button id="btnSend" title="Надіслати клієнту">📤 <span class="label">Клієнту</span></button><button id="btnPrint">🖨 Друк</button><button id="btnDelete" class="danger-lite need-admin" title="Видалити замовлення-наряд">🗑</button></div>
     </div>
     ${o.ai_usage && o.ai_usage.requests ? `<div class="ai-cost" title="Вартість запитів до Claude по цьому замовленню-наряду (у друковану форму не потрапляє)">Claude: ${usd(o.ai_usage.cost_usd)} · запитів: ${o.ai_usage.requests}</div>` : ""}
     ${o.status_log && o.status_log.length ? `<div class="status-log">${o.status_log.slice(-5).map(e => `${esc(e.status)} ${esc(e.at)}${e.by ? " (" + esc(e.by) + ")" : ""}`).join(" → ")}</div>` : ""}
@@ -1157,7 +1168,7 @@ async function showOrders(){
       <tr><th>Номер</th><th>Дата</th><th>Клієнт</th><th>Автомобіль</th><th class="r">Сума</th><th>Статус</th><th class="r" title="Витрати на Claude">Claude</th><th></th></tr>
       ${list.map(o => `<tr><td>${esc(o.number)}${o.comments ? ` <span class="cc" title="Внутрішні коментарі">💬${o.comments}</span>` : ""}</td><td>${esc(o.created_at)}</td><td>${dash(o.customer)}</td><td>${dash(o.vehicle)}</td>
         <td class="r">${num(o.total)} ${esc(o.currency)}${o.status === "видано" && Number(o.balance) > 0 ? `<div class="sub" style="color:var(--accent)">борг ${num(o.balance)}</div>` : o.payment_status === "оплачено" ? `<div class="sub" style="color:var(--ok)">оплачено</div>` : ""}</td><td><span class="badge ${stClass(o.status)}">${esc(o.status)}</span></td><td class="r sub">${o.ai_cost ? usd(o.ai_cost) : "—"}</td>
-        <td class="r"><button data-open="${esc(o.number)}">Відкрити</button> <button data-print="${esc(o.number)}">🖨</button> <button data-del-order="${esc(o.number)}" title="Видалити">🗑</button></td></tr>`).join("")}
+        <td class="r"><button data-open="${esc(o.number)}">Відкрити</button> <button data-print="${esc(o.number)}">🖨</button> <button class="need-admin" data-del-order="${esc(o.number)}" title="Видалити">🗑</button></td></tr>`).join("")}
       </table></div>` : `<div class="empty">${q || ordersStatus ? "Нічого не знайдено." : "Збережених замовлень-нарядів поки немає."}</div>`;
   }catch(e){ $("#ordersList").textContent = e.message; }
 }
@@ -1809,8 +1820,8 @@ async function showClients(){
   const connected = clientsData.clients.filter(c => c.telegram && !c.telegram.blocked).length;
   $("#clientsBody").innerHTML = `
     <div class="toolbar"><input id="clientsQuery" type="search" placeholder="Пошук: ПІБ, телефон, VIN, держномер" value="${esc(clientsQuery)}">
-      ${clientsData.telegram ? `<button class="primary" data-broadcast>📣 Розсилка</button>` : ""}
-      <button data-download="/api/clients/export.xlsx">⬇ Excel</button></div>
+      ${clientsData.telegram ? `<button class="primary need-admin" data-broadcast>📣 Розсилка</button>` : ""}
+      <button class="need-admin" data-download="/api/clients/export.xlsx">⬇ Excel</button></div>
     <div class="filter-chips" id="clientFilter">${CLIENT_FILTERS.map(([v, l]) => `<button data-cf="${v}" class="${v === clientsFilter ? "on" : ""}">${l}</button>`).join("")}</div>
     <div class="sub" style="margin-bottom:8px">Усього клієнтів: ${clientsData.clients.length}${clientsData.telegram ? ` · у Telegram: ${connected}` : ""}</div>
     <div id="clientsTable"></div>`;
@@ -1965,8 +1976,8 @@ function renderHome(){
       ${kpi("в роботі", k.in_work, 'data-home-jump="stage-1"')}
       ${kpi("готово до видачі", k.ready, 'data-home-jump="stage-2"', k.ready ? "good" : "")}
       ${kpi("записів сьогодні", k.bookings_today, 'data-home-jump="home-bookings"')}
-      ${kpi("отримано сьогодні", num(k.cash_today) + " $", 'data-home-act="cash"')}
-      ${kpi("борги клієнтів", num(k.debts) + " $", 'data-home-act="debts"', Number(k.debts) > 0 ? "bad" : "")}
+      ${k.cash_today != null ? kpi("отримано сьогодні", num(k.cash_today) + " $", 'data-home-act="cash"') : ""}
+      ${k.debts != null ? kpi("борги клієнтів", num(k.debts) + " $", 'data-home-act="debts"', Number(k.debts) > 0 ? "bad" : "") : ""}
     </div>
     ${d.alerts.length ? `<section class="attn ${d.alerts.length > 3 ? "folded" : ""}" id="attn"><h3>⚠ Потребує уваги · ${d.alerts.length}</h3>
       ${d.alerts.map(a => `<button class="attn-row" ${a.number ? `data-home-open="${esc(a.number)}"` : a.kind === "stock" ? 'data-home-act="stock"' : 'data-home-act="booking"'}>
@@ -2140,24 +2151,102 @@ function showCatalog(view){
         <input id="catQuery" type="search" placeholder="Пошук: колодки, кондиціонер, BRK-PAD-F…" value="${esc(catQuery)}">
         <select id="catCategory"><option value="">Усі розділи</option>${catalogData.categories.map(c =>
           `<option ${c === catCategory ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
-        <button class="primary" data-new-op>＋ Нова робота</button></div><div id="opsTable"></div>`;
+        <button class="primary need-admin" data-new-op>＋ Нова робота</button></div><div id="opsTable"></div>`;
     $("#catQuery").oninput = e => { catQuery = e.target.value; renderOpsTable(); };
     $("#catCategory").onchange = e => { catCategory = e.target.value; renderOpsTable(); };
     renderOpsTable();
   } else if (catView === "parts"){
     $("#catalogList").innerHTML = `${flash}<div class="toolbar">
         <input id="partQuery" type="search" placeholder="Пошук запчастини або артикулу" value="${esc(partQuery)}">
-        <button class="primary" data-new-part>＋ Нова запчастина</button></div><div id="partsTable"></div>`;
+        <button class="primary need-admin" data-new-part>＋ Нова запчастина</button></div><div id="partsTable"></div>`;
     $("#partQuery").oninput = e => { partQuery = e.target.value; renderPartsTable(); };
     renderPartsTable();
   } else if (catView === "stock"){
     loadStock(flash);
   } else if (catView === "purchases"){
     loadPurchases(flash);
+  } else if (catView === "staff"){
+    loadStaff(flash);
   } else {
     renderSettingsForm(flash);
   }
 }
+
+// ---------- Співробітники (власник) ----------
+let staffData = null;
+async function loadStaff(flash = ""){
+  $("#catalogList").innerHTML = `${flash}<div class="sub" style="margin:8px 0">Кожен входить на сайт під своїм ім'ям за телефоном: кодом, який бот надсилає в Telegram
+      (після запрошення), або особистим паролем. Загальний пароль сервісу — вхід власника.
+      <b>Майстер</b>: замовлення, статуси, коментарі, фото, запис. <b>Адміністратор</b>: плюс оплати й каса, видалення, довідник,
+      склад і закупівлі, розсилки. <b>Власник</b>: усе, зокрема співробітники, налаштування, резервні копії й витрати на Claude.</div>
+    <form class="staff-add" id="staffAdd" autocomplete="off"><input id="stName" placeholder="Ім'я" required>
+      <input id="stPhone" type="tel" placeholder="Телефон" required>
+      <select id="stRole"><option value="master">майстер</option><option value="admin">адміністратор</option><option value="owner">власник</option></select>
+      <button class="primary">＋ Додати</button></form>
+    <div class="form-err" id="staffErr" hidden></div>
+    <div id="staffTable">Завантаження…</div>`;
+  $("#staffAdd").onsubmit = async e => {
+    e.preventDefault();
+    await staffCall("POST", "/api/staff", {name: $("#stName").value, phone: $("#stPhone").value, role: $("#stRole").value}, "Співробітника додано");
+  };
+  try{ staffData = await api("/api/staff"); renderStaff(); }
+  catch(e){ $("#staffTable").textContent = e.message; }
+}
+async function staffCall(method, url, body, flash){
+  try{
+    staffData = await api(url, {method, body: body ? JSON.stringify(body) : undefined});
+    if (flash){ catFlash = flash; return loadStaff(`<div class="form-ok">✓ ${esc(flash)}</div>`); }
+    renderStaff();
+  }catch(err){ $("#staffErr").hidden = false; $("#staffErr").textContent = err.message; }
+}
+function renderStaff(){
+  const list = staffData.staff;
+  $("#staffTable").innerHTML = list.length ? `<div class="tbl"><table><tr><th>Співробітник</th><th>Роль</th><th class="hide-m">Вхід</th><th></th></tr>
+    ${list.map(e => `<tr class="staff-row ${e.active ? "" : "off"}"><td><b>${esc(e.name)}</b><div class="sub">${esc(e.phone)}</div></td>
+      <td><select data-staff-role="${esc(e.id)}">${Object.entries(staffData.roles).map(([k, v]) => `<option value="${k}" ${k === e.role ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
+        ${e.active ? "" : `<div class="sub">вимкнено</div>`}</td>
+      <td class="hide-m sub">${e.tg_id ? `<span class="tg">✓ Telegram</span> ${esc(e.tg_name)}` : staffData.telegram ? "Telegram не прив'язано" : ""}${e.has_password ? `<div>🔑 є пароль</div>` : ""}</td>
+      <td><div class="staff-acts">
+        ${staffData.telegram ? `<button data-staff-invite="${esc(e.id)}" title="Посилання для прив'язки Telegram">🔗 ${e.tg_id ? "Нове запрошення" : "Запрошення"}</button>` : ""}
+        <button data-staff-pwd="${esc(e.id)}">🔑 Пароль</button>
+        <button data-staff-active="${esc(e.id)}" data-on="${e.active ? 0 : 1}">${e.active ? "⏸ Вимкнути" : "▶ Увімкнути"}</button></div></td></tr>`).join("")}</table></div>`
+    : `<div class="empty">Співробітників ще немає. Додайте першого — і він зможе входити під своїм ім'ям.</div>`;
+}
+function staffInviteDialog(e){
+  $("#lineTitle").textContent = `Запрошення · ${e.name}`;
+  $("#lineBody").innerHTML = `<div class="send-sec"><div class="sub">Надішліть це посилання співробітнику (у Telegram, Viber чи SMS). Він відкриває його й натискає «Старт» —
+      бот прив'язує його Telegram, і далі він входить на сайт кодом: <b>${esc(staffData.login_url)}</b> → свій телефон → код із Telegram.
+      Посилання одноразове.</div>
+    ${e.invite_link ? `<div class="link-row"><input readonly value="${esc(e.invite_link)}"><button id="copyInv">Копіювати</button>${navigator.share ? `<button id="shareInv">Поділитися</button>` : ""}</div>`
+      : `<div class="form-err">Не вдалося отримати посилання — перевірте Telegram-бота.</div>`}</div>`;
+  $("#lineDlg").showModal();
+  if ($("#copyInv")) $("#copyInv").onclick = async () => { try{ await navigator.clipboard.writeText(e.invite_link); $("#copyInv").textContent = "✓ Скопійовано"; }catch(x){ prompt("Скопіюйте:", e.invite_link); } };
+  if ($("#shareInv")) $("#shareInv").onclick = () => navigator.share({text: `Вхід у ${document.title}: ${e.invite_link}`}).catch(() => {});
+}
+document.addEventListener("change", e => {
+  const id = e.target.dataset && e.target.dataset.staffRole;
+  if (id) staffCall("PUT", `/api/staff/${id}`, {role: e.target.value}, "Роль змінено — співробітнику треба увійти знову");
+});
+document.addEventListener("click", async e => {
+  const d = e.target.dataset || {};
+  if (d.staffInvite){
+    const emp = staffData.staff.find(x => x.id === d.staffInvite);
+    if (emp.tg_id && !confirm(`${emp.name} уже прив'язав Telegram. Нове запрошення відв'яже поточний Telegram. Продовжити?`)) return;
+    if (emp.tg_id || !emp.invite_link) await staffCall("POST", `/api/staff/${emp.id}/invite`);
+    staffInviteDialog(staffData.staff.find(x => x.id === d.staffInvite));
+  }
+  if (d.staffPwd){
+    const emp = staffData.staff.find(x => x.id === d.staffPwd);
+    const pwd = prompt(`Особистий пароль для ${emp.name} (щонайменше 8 символів).\nПорожньо — прибрати пароль.`);
+    if (pwd === null) return;
+    await staffCall("PUT", `/api/staff/${emp.id}/password`, {password: pwd}, pwd ? "Пароль задано" : "Пароль прибрано");
+  }
+  if (d.staffActive){
+    const emp = staffData.staff.find(x => x.id === d.staffActive);
+    if (d.on === "0" && !confirm(`Вимкнути ${emp.name}? Він одразу втратить доступ до сайту й кнопок у Telegram.`)) return;
+    await staffCall("PUT", `/api/staff/${emp.id}`, {active: d.on === "1"}, d.on === "1" ? "Увімкнено" : "Вимкнено — доступ закрито");
+  }
+});
 
 // ---------- Закупівлі ----------
 let poData = null;
@@ -2264,8 +2353,8 @@ let stockData = null, stockQuery = "", stockLowOnly = false;
 async function loadStock(flash = ""){
   $("#catalogList").innerHTML = `${flash}<div class="toolbar">
       <input id="stockQuery" type="search" placeholder="Пошук запчастини або артикулу" value="${esc(stockQuery)}">
-      <button data-download="/api/stock/to-order.xlsx">⬇ Що замовити (Excel)</button>
-      <button class="primary" data-po-from-low>＋ Замовити постачальнику</button></div>
+      <button class="need-admin" data-download="/api/stock/to-order.xlsx">⬇ Що замовити (Excel)</button>
+      <button class="primary need-admin" data-po-from-low>＋ Замовити постачальнику</button></div>
     <div class="filter-chips"><button data-stock-filter="0" class="${stockLowOnly ? "" : "on"}">усі</button><button data-stock-filter="1" class="${stockLowOnly ? "on" : ""}">⚠ треба замовити</button></div>
     <div class="sub" style="margin:6px 0">Запчастини з довідника списуються автоматично, коли замовлення-наряд отримує статус «видано».
       «Резерв» — уже вписані в замовлення, які ще не видано. Мінімум 0 — без нагадувань.</div>
@@ -2285,7 +2374,7 @@ function renderStockTable(){
       <td class="r"><b class="${i.low || i.free < 0 ? "stock-low" : ""}">${n(i.qty)}</b> ${esc(i.unit)}${i.free < 0 ? `<div class="sub stock-low">бракує ${n(-i.free)}</div>` : i.low ? `<div class="sub stock-low">замовити</div>` : ""}</td>
       <td class="r hide-m">${i.reserved ? n(i.reserved) : "—"}</td><td class="r hide-m">${i.min ? n(i.min) : "—"}</td>
       <td class="r hide-m">${i.cost != null ? `${num(i.cost)} $<div class="sub">${i.markup != null ? (i.markup > 0 ? "+" : "") + i.markup + "%" : ""}</div>` : "—"}</td>
-      <td class="r acts"><button data-stock-in="${esc(i.part_no)}" title="Прихід">＋</button> <button data-stock-adj="${esc(i.part_no)}" title="Інвентаризація, мінімум, історія">⚖</button></td></tr>`).join("")}
+      <td class="r acts need-admin"><button data-stock-in="${esc(i.part_no)}" title="Прихід">＋</button> <button data-stock-adj="${esc(i.part_no)}" title="Інвентаризація, мінімум, історія">⚖</button></td></tr>`).join("")}
     </table></div>` : `<div class="empty">${stockLowOnly ? "Усього вистачає — замовляти нічого." : "Нічого не знайдено."}</div>`;
 }
 async function stockDialog(partNo, mode){
@@ -2346,7 +2435,7 @@ function renderOpsTable(){
     html += `<tr><td>${esc(o.name)}<div class="sub">${esc(o.code)}${o.interval ? " · " + esc(o.interval) : ""}${o.parts.length ? " · " + o.parts.map(p => esc(p.name)).join(", ") : ""}<span class="show-m"> · ${esc(o.models)}</span></div></td>
       <td class="hide-m">${esc(o.models)}</td>
       <td class="r">${num(o.price)} ${cur}${o.parts.length ? `<div class="sub show-m">+ запч. ${num(o.parts_price)}</div>` : ""}</td><td class="r hide-m">${o.parts.length ? num(o.parts_price) + " " + cur : "—"}</td>
-      <td class="r acts"><button data-edit-op="${esc(o.code)}" title="Редагувати">✎</button> <button data-add="${esc(o.code)}" title="Додати до замовлення-наряду">＋</button></td></tr>`;
+      <td class="r acts"><button class="need-admin" data-edit-op="${esc(o.code)}" title="Редагувати">✎</button> <button data-add="${esc(o.code)}" title="Додати до замовлення-наряду">＋</button></td></tr>`;
   }
   $("#opsTable").innerHTML = html + "</table></div>";
 }
@@ -2358,7 +2447,7 @@ function renderPartsTable(){
     <tr><th>Запчастина</th><th class="r">Ціна</th><th class="hide-m">Од.</th><th class="r hide-m">У роботах</th><th></th></tr>
     ${parts.map(p => `<tr><td>${esc(p.name)}<div class="sub">${esc(p.part_no)}<span class="show-m"> · ${esc(p.unit)}</span></div></td>
       <td class="r">${num(p.price)} ${cur}</td><td class="hide-m">${esc(p.unit)}</td><td class="r hide-m">${p.used || "—"}</td>
-      <td class="r"><button data-edit-part="${esc(p.part_no)}" title="Редагувати">✎</button></td></tr>`).join("")}
+      <td class="r"><button class="need-admin" data-edit-part="${esc(p.part_no)}" title="Редагувати">✎</button></td></tr>`).join("")}
     </table></div>` : `<div class="empty">Нічого не знайдено.</div>`;
 }
 
@@ -2623,6 +2712,16 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
   try{
     const s = await api("/api/state");
     if (s.auth) $("#btnLogout").hidden = false;
+    if (s.user){
+      USER = s.user;
+      document.body.classList.add("role-" + USER.role);
+      if (s.auth){
+        document.querySelector("header h1 span:not(#brand)").textContent =
+          isEmployee() ? `· ${USER.name} (${USER.role_label})` : "· вхід власника";
+        $("#btnLogout").title = `Вийти (${USER.name})`;
+        $("#menuLogout").textContent = `⎋ Вийти · ${USER.name}`;
+      }
+    }
     if (s.statuses) STATUSES = s.statuses;
     TELEGRAM = !!s.telegram;
     BACKUP_CHAT = !!s.backup_chat;
